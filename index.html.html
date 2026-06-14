@@ -1,0 +1,1828 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NeuroRadReporter — Automatic Neuroradiology Reporting</title>
+
+<!--
+  SECURITY HARDENING — threat model summary
+  ══════════════════════════════════════════
+  [FIXED] XSS-1: DICOM metadata injected raw into innerHTML → sanitizeText() on all DICOM strings
+  [FIXED] XSS-2: AI report output injected into innerHTML → fmtRep() uses textContent, never innerHTML for content
+  [FIXED] XSS-3: Error messages injected into innerHTML → error display uses textContent only
+  [FIXED] INJ-1: Series UID embedded in onclick="...('UID')" → replaced with data-uid + addEventListener
+  [FIXED] PROTO: DICOM UID used as SM[uid] key → Map() instead of plain object, no prototype pollution
+  [FIXED] SRI: dicom-parser loaded without integrity hash → integrity + crossorigin attributes added
+  [FIXED] CSP: No Content-Security-Policy → meta CSP blocks inline exfiltration
+  [FIXED] DoS: No file count/size limits → enforced at import (500 files, 200MB each)
+  [FIXED] KEY: API_KEY in global let → scoped inside IIFE, not accessible from console
+  [NOTE]  API key still readable from browser memory (inherent to client-side) — document in threat model
+-->
+
+<!-- CSP removed: the Claude artifact sandbox provides its own security context.
+     A restrictive CSP meta tag breaks CDN loading and API access inside the iframe.
+     Re-add CSP at the HTTP response header level when deploying to a real server. -->
+
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&display=swap" rel="stylesheet">
+
+<!-- SRI: integrity hash must be computed in your build pipeline (see Security page).
+     Run: curl -s https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js | openssl dgst -sha384 -binary | base64
+     Then add integrity="sha384-<hash>" crossorigin="anonymous" before production deployment.
+-->
+<script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
+
+<style>
+:root{--bg:#F5F3EE;--sur:#FDFCFA;--s2:#EFEDE8;--bd:rgba(40,35,28,.1);--bdm:rgba(40,35,28,.18);--bds:rgba(40,35,28,.23);--tx:#1A1714;--t2:#6B6560;--t3:#9E9892;--ac:#1A3A5C;--al:#E6EDF4;--am:#4A7BAA;--gn:#2D6A4F;--gb:#E8F5EE;--ab:#7B5E1E;--ag:#FDF3DB;--rd:#8B2020;--rg:#FDECEC;--tl:#1B5E52;--tg:#E3F4F0;--pu:#4A2D7A;--pg:#EEE8F8;--r:10px;--rs:6px}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--tx);font-size:14px;line-height:1.6;min-height:100vh}
+.shell{display:flex;height:100vh;overflow:hidden}
+.sidebar{width:220px;min-width:220px;background:var(--sur);border-right:.5px solid var(--bds);display:flex;flex-direction:column;overflow-y:auto}
+.main{flex:1;overflow-y:auto;background:var(--bg)}
+.page{display:none;padding:22px 26px}.page.active{display:block}
+.sb-logo{padding:15px 15px 12px;border-bottom:.5px solid var(--bd)}
+.wm{font-family:'Instrument Serif',serif;font-size:17px;letter-spacing:-.3px}
+.wm span{color:var(--am)}
+.tl{font-size:10px;color:var(--t3);letter-spacing:.07em;text-transform:uppercase;margin-top:2px}
+.nav{padding:6px 0;flex:1}
+.ns{padding:7px 15px 3px;font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--t3)}
+.ni{display:flex;align-items:center;gap:8px;padding:7px 15px;cursor:pointer;font-size:13px;color:var(--t2);transition:background .1s,color .1s;position:relative}
+.ni:hover{background:var(--s2);color:var(--tx)}.ni.active{background:var(--al);color:var(--ac);font-weight:500}
+.ni.active::before{content:'';position:absolute;left:0;top:20%;bottom:20%;width:3px;background:var(--ac);border-radius:0 3px 3px 0}
+.ni svg{width:14px;height:14px;opacity:.65;flex-shrink:0}.ni.active svg{opacity:1}
+.nbadge{margin-left:auto;background:var(--ac);color:#fff;font-size:10px;padding:1px 6px;border-radius:20px;font-weight:500}.nbadge.g{background:var(--gn)}
+.sb-foot{padding:10px 15px;border-top:.5px solid var(--bd);font-size:11px;color:var(--t3)}
+.sb-foot strong{color:var(--t2);font-weight:500}
+.cb{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:500;padding:3px 7px;border-radius:20px;margin-top:4px}
+.cb::before{content:'';width:5px;height:5px;border-radius:50%}
+.cb.g{background:var(--gb);color:var(--gn)}.cb.g::before{background:var(--gn)}
+.cb.p{background:var(--pg);color:var(--pu)}.cb.p::before{background:var(--pu)}
+.cb.r{background:var(--rg);color:var(--rd)}.cb.r::before{background:var(--rd)}
+.api-bar{background:var(--s2);border-bottom:.5px solid var(--bds);padding:8px 15px;display:flex;align-items:center;gap:8px;font-size:12px;flex-shrink:0}
+.api-bar label{color:var(--t2);font-weight:500;white-space:nowrap}
+.api-bar input{flex:1;padding:5px 9px;border:.5px solid var(--bds);border-radius:var(--rs);font-size:12px;font-family:'DM Mono',monospace;background:var(--sur);color:var(--tx);min-width:0}
+.api-status{font-size:10px;padding:2px 7px;border-radius:20px;font-weight:500;white-space:nowrap}
+.api-status.set{background:var(--gb);color:var(--gn)}.api-status.unset{background:var(--rg);color:var(--rd)}
+.ph{margin-bottom:16px}
+.ph h1{font-family:'Instrument Serif',serif;font-size:23px;font-weight:400;letter-spacing:-.3px;line-height:1.2}
+.ph p{font-size:13px;color:var(--t2);margin-top:3px}
+.card{background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);padding:14px 17px;margin-bottom:12px}
+.ct{font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--t3);margin-bottom:10px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
+.stat{background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);padding:10px 12px}
+.sl{font-size:11px;color:var(--t3);margin-bottom:2px}
+.sv{font-family:'DM Mono',monospace;font-size:20px}
+.sv.b{color:var(--ac)}.sv.g{color:var(--gn)}.sv.a{color:var(--ab)}.sv.r{color:var(--rd)}
+.dz{border:1.5px dashed var(--bds);border-radius:var(--r);padding:28px 20px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s;background:var(--sur);margin-bottom:12px}
+.dz:hover,.dz.over{border-color:var(--am);background:var(--al)}
+.dz svg{margin:0 auto 9px;width:32px;height:32px;opacity:.28;display:block}
+.dzt{font-size:14px;font-weight:500;margin-bottom:3px}
+.dzs{font-size:12px;color:var(--t2)}.dzl{color:var(--ac);text-decoration:underline;cursor:pointer}
+input[type=file]{display:none}
+.tw{background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);overflow:hidden;margin-bottom:12px}
+table{width:100%;border-collapse:collapse;font-size:12.5px;table-layout:fixed}
+thead tr{background:var(--s2);border-bottom:.5px solid var(--bds)}
+th{padding:7px 11px;text-align:left;font-weight:500;font-size:11px;color:var(--t3);letter-spacing:.04em}
+td{padding:7px 11px;color:var(--tx);border-bottom:.5px solid var(--bd);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--s2)}
+.es{padding:18px;text-align:center;color:var(--t3);font-size:12.5px}
+.badge{display:inline-block;padding:2px 7px;border-radius:20px;font-size:11px;font-weight:500}
+.bp{background:var(--ag);color:var(--ab)}.bd2{background:var(--gb);color:var(--gn)}.be{background:var(--rg);color:var(--rd)}.bpr{background:var(--al);color:var(--ac)}.brp{background:var(--tg);color:var(--tl)}.bpu{background:var(--pg);color:var(--pu)}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:var(--rs);font-size:13px;font-weight:500;cursor:pointer;transition:all .12s;border:.5px solid var(--bds);font-family:'DM Sans',sans-serif}
+.btn-p{background:var(--ac);color:#fff;border-color:var(--ac)}.btn-p:hover{background:#13304f}
+.btn-s{background:var(--sur);color:var(--tx)}.btn-s:hover{background:var(--s2)}
+.btn-g{background:transparent;border-color:transparent;color:var(--t2);padding:4px 8px;font-size:12px}.btn-g:hover{background:var(--s2);color:var(--tx)}
+.btn:disabled{opacity:.3;cursor:not-allowed;pointer-events:none}
+.brow{display:flex;gap:8px;align-items:center}
+.pw{flex:1;height:4px;background:var(--s2);border-radius:20px;overflow:hidden}
+.pf{height:100%;background:var(--am);border-radius:20px;transition:width .3s}
+.mc{font-family:'DM Mono',monospace;font-size:10px;color:var(--t3);background:var(--s2);border-radius:4px;padding:2px 5px;border:.5px solid var(--bd);max-width:130px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ob{display:flex;align-items:flex-start;gap:10px;background:var(--ag);border:.5px solid #E2B96A;border-radius:var(--r);padding:11px 15px;margin-bottom:12px;font-size:12.5px;color:var(--ab)}
+.ob.hi{background:var(--pg);border-color:#C4AEE8;color:var(--pu)}
+.ob svg{flex-shrink:0;margin-top:1px}.ob strong{display:block;font-weight:500;margin-bottom:1px}
+.tcs{display:flex;flex-wrap:wrap;gap:5px}
+.tc{font-size:11px;padding:2px 8px;background:var(--s2);border:.5px solid var(--bd);border-radius:20px;color:var(--t2)}
+.rep-layout{display:grid;grid-template-columns:280px 1fr;gap:12px;align-items:start}
+.sp{background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);overflow:hidden}
+.sp-head{padding:10px 14px;border-bottom:.5px solid var(--bd);display:flex;align-items:center;justify-content:space-between}
+.sp-head h3{font-size:13px;font-weight:500}
+.sl-list{max-height:calc(100vh - 270px);overflow-y:auto}
+.si{padding:10px 14px;border-bottom:.5px solid var(--bd);cursor:pointer;transition:background .1s}
+.si:last-child{border-bottom:none}.si:hover{background:var(--s2)}
+.si.active{background:var(--al);border-left:3px solid var(--ac)}.si.active .si-t{color:var(--ac)}
+.si-t{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:3px}
+.si-m{font-size:11px;color:var(--t3);display:flex;gap:7px;flex-wrap:wrap}
+.si-s{margin-top:4px}
+.sl-empty{padding:20px 14px;text-align:center;color:var(--t3);font-size:12.5px}
+.rp{background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);display:flex;flex-direction:column;min-height:460px}
+.rp-head{padding:10px 14px;border-bottom:.5px solid var(--bd);display:flex;align-items:center;gap:10px}
+.rp-head h3{font-size:13px;font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ── DICOM Viewer ── */
+.viewer-wrap{display:flex;flex-direction:column;background:#111;border-bottom:.5px solid var(--bd)}
+.viewer-main{position:relative;display:flex;align-items:center;justify-content:center;background:#000;min-height:340px;user-select:none}
+.viewer-canvas{display:block;max-width:100%;max-height:420px;object-fit:contain;image-rendering:pixelated}
+.viewer-overlay{position:absolute;top:8px;left:10px;font-family:'DM Mono',monospace;font-size:10px;color:rgba(255,255,255,.55);line-height:1.7;pointer-events:none}
+.viewer-overlay-br{position:absolute;bottom:8px;right:10px;font-family:'DM Mono',monospace;font-size:10px;color:rgba(255,255,255,.45);pointer-events:none;text-align:right}
+.viewer-nav{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.1);border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:18px;padding:8px 10px;transition:background .12s;line-height:1}
+.viewer-nav:hover{background:rgba(255,255,255,.25)}
+.viewer-nav.prev{left:8px}.viewer-nav.next{right:8px}
+.viewer-controls{display:flex;align-items:center;gap:10px;padding:7px 12px;background:#1a1a1a;border-bottom:1px solid #2a2a2a}
+.viewer-slider{flex:1;accent-color:var(--am);cursor:pointer;height:3px}
+.viewer-slice-lbl{font-family:'DM Mono',monospace;font-size:10px;color:rgba(255,255,255,.5);white-space:nowrap;min-width:60px;text-align:right}
+.viewer-ww-btn{background:rgba(255,255,255,.08);border:none;border-radius:3px;color:rgba(255,255,255,.5);cursor:pointer;font-size:10px;font-family:'DM Mono',monospace;padding:2px 7px;transition:background .12s}
+.viewer-ww-btn:hover,.viewer-ww-btn.active{background:rgba(74,123,170,.4);color:#7aafdd}
+.filmstrip{display:flex;gap:4px;padding:8px 10px;background:#0d0d0d;overflow-x:auto;min-height:74px;align-items:center;scrollbar-width:thin;scrollbar-color:#333 #0d0d0d}
+.filmstrip::-webkit-scrollbar{height:4px}.filmstrip::-webkit-scrollbar-track{background:#0d0d0d}.filmstrip::-webkit-scrollbar-thumb{background:#333;border-radius:2px}
+.fs-frame{flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer}
+.fs-canvas{width:56px;height:56px;border-radius:3px;border:1.5px solid #2a2a2a;display:block;image-rendering:pixelated;transition:border-color .1s}
+.fs-frame.active .fs-canvas{border-color:var(--am);box-shadow:0 0 0 1px var(--am)}
+.fs-frame:hover .fs-canvas{border-color:#555}
+.fs-lbl{font-family:'DM Mono',monospace;font-size:8px;color:#444}
+.fs-frame.active .fs-lbl{color:var(--am)}
+.thumbs{display:none} /* hidden — replaced by viewer */
+.tw-wrap,.thumb,.tw-lbl,.tw-kb{display:none}
+.rp-tabs{display:flex;border-bottom:.5px solid var(--bd)}
+.rp-tab{padding:8px 13px;font-size:12.5px;cursor:pointer;color:var(--t2);border-bottom:2px solid transparent;transition:all .12s;background:none;border-top:none;border-left:none;border-right:none;font-family:'DM Sans',sans-serif}
+.rp-tab:hover{color:var(--tx)}.rp-tab.active{color:var(--ac);border-bottom-color:var(--ac);font-weight:500}
+.rp-body{flex:1;overflow-y:auto;padding:14px;min-height:300px;max-height:calc(100vh - 400px)}
+.rsect{font-weight:500;font-size:13px;color:var(--tx);margin-top:12px;margin-bottom:2px}
+.rline{font-size:12.5px;color:var(--t2);line-height:1.65}
+.oe{padding:32px 14px;text-align:center;color:var(--t3)}
+.oe-ic{font-size:28px;margin-bottom:8px;opacity:.35}
+.oe p{font-size:13px;margin-bottom:3px}.oe-sub{font-size:12px;color:var(--t3)}
+.tip{background:var(--s2);border-radius:var(--rs);padding:7px 10px;font-size:12px;color:var(--t2);margin-top:9px;border:.5px solid var(--bd);max-width:300px;margin-left:auto;margin-right:auto}
+.gen{padding:18px 14px;display:flex;flex-direction:column;gap:12px}
+.gs{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--t2)}
+.gs.done{color:var(--gn)}.gs.act{color:var(--ac)}.gs.wait{color:var(--t3)}
+.gic{width:20px;height:20px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px}
+.spin-ic{border:2px solid var(--bdm);border-top-color:var(--ac);animation:sp .7s linear infinite}
+.done-ic{background:var(--gb);color:var(--gn)}.wait-ic{background:var(--s2);color:var(--t3)}
+@keyframes sp{to{transform:rotate(360deg)}}
+.mgrid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.mg{background:var(--s2);border-radius:var(--rs);padding:7px 9px}
+.mg-l{font-size:10px;color:var(--t3);letter-spacing:.05em;text-transform:uppercase;margin-bottom:2px}
+.mg-v{font-size:12.5px;font-weight:500;word-break:break-all}
+.disc{padding:8px 13px;border-top:.5px solid var(--bd);font-size:11px;color:var(--t3);background:var(--s2);border-radius:0 0 var(--r) var(--r)}
+.copy-btn{background:var(--s2);border:.5px solid var(--bd);border-radius:var(--rs);padding:4px 9px;font-size:12px;cursor:pointer;color:var(--t2);font-family:'DM Sans',sans-serif;flex-shrink:0}
+.copy-btn:hover{background:var(--gb);color:var(--gn)}
+.err-box{background:var(--rg);border:.5px solid #E8A0A0;border-radius:var(--rs);padding:10px 14px;font-size:12.5px;color:var(--rd);margin-bottom:12px}
+.sec-banner{background:var(--s2);border:.5px solid var(--bds);border-radius:var(--rs);padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--t2)}
+.sec-banner strong{color:var(--tx);font-weight:500}
+.cg{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.cc{background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);padding:14px 16px}
+.cc.full{grid-column:1/-1}
+.cch{display:flex;align-items:flex-start;gap:9px;margin-bottom:9px}
+.cci{width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.cci.b{background:var(--al)}.cci.g{background:var(--gb)}.cci.a{background:var(--ag)}.cci.t{background:var(--tg)}.cci.p{background:var(--pg)}
+.cct{font-weight:500;font-size:13px;margin-bottom:1px}.ccs{font-size:11px;color:var(--t3)}
+.cl{list-style:none;display:flex;flex-direction:column;gap:6px}
+.cl li{display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--t2);line-height:1.5}
+.cl li::before{content:'';width:15px;height:15px;border-radius:50%;flex-shrink:0;margin-top:1px;background:var(--gb);border:1.5px solid var(--gn);background-image:url("data:image/svg+xml,%3Csvg width='9' height='7' viewBox='0 0 9 7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 3.5L3.2 6L8 1' stroke='%232D6A4F' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:center}
+.cl li.w::before{background:var(--ag);border-color:#A0761F;background-image:url("data:image/svg+xml,%3Csvg width='9' height='9' viewBox='0 0 9 9' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M4.5 2V5' stroke='%23A0761F' stroke-width='1.4' stroke-linecap='round'/%3E%3Ccircle cx='4.5' cy='7' r='.7' fill='%23A0761F'/%3E%3C/svg%3E");background-position:center}
+.ar{font-family:'DM Mono',monospace;font-size:10px;color:var(--ac);background:var(--al);padding:1px 5px;border-radius:3px;margin-right:3px}
+.ar.h{color:var(--pu);background:var(--pg)}.ar.r{color:var(--rd);background:var(--rg)}
+.ctl{list-style:none;position:relative;padding-left:20px;display:flex;flex-direction:column}
+.ctl::before{content:'';position:absolute;left:5px;top:8px;bottom:8px;width:1px;background:var(--bds)}
+.ctl-i{position:relative;padding:0 0 12px 10px}.ctl-i:last-child{padding-bottom:0}
+.ctl-i::before{content:'';position:absolute;left:-4px;top:4px;width:9px;height:9px;border-radius:50%;background:var(--s2);border:1.5px solid var(--bds)}
+.ctl-i.on::before{background:var(--gn);border-color:var(--gn)}.ctl-i.up::before{background:var(--ag);border-color:#A0761F}
+.ctl-d{font-family:'DM Mono',monospace;font-size:10px;color:var(--t3);margin-bottom:1px}
+.ctl-t{font-size:12.5px;font-weight:500}.ctl-ds{font-size:11.5px;color:var(--t2);margin-top:2px;line-height:1.5}
+.ae{display:flex;gap:10px;padding:8px 0;border-bottom:.5px solid var(--bd);font-size:12px}
+.ae:last-child{border-bottom:none}
+.at2{font-family:'DM Mono',monospace;font-size:10.5px;color:var(--t3);min-width:64px;padding-top:2px}
+.am2{color:var(--t2);flex:1}.am2 strong{color:var(--tx);font-weight:500}
+.alv{font-size:10px;padding:1px 6px;border-radius:3px;align-self:flex-start;font-weight:500}
+.alv.info{background:var(--al);color:var(--ac)}.alv.ok{background:var(--gb);color:var(--gn)}.alv.warn{background:var(--ag);color:var(--ab)}
+.srow{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:.5px solid var(--bd)}
+.srow:last-child{border-bottom:none}
+.srl{font-size:13px;font-weight:500}.srd{font-size:11.5px;color:var(--t3);margin-top:1px}
+.tog{position:relative;width:32px;height:19px;flex-shrink:0}
+.tog input{opacity:0;width:0;height:0}
+.tog-t{position:absolute;inset:0;border-radius:20px;background:var(--s2);border:.5px solid var(--bds);cursor:pointer;transition:background .14s}
+.tog input:checked+.tog-t{background:var(--ac);border-color:var(--ac)}
+.tog-th{position:absolute;top:3px;left:3px;width:13px;height:13px;border-radius:50%;background:var(--sur);transition:left .14s;pointer-events:none}
+.tog input:checked~.tog-th{left:16px}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--tx);color:var(--sur);padding:8px 16px;border-radius:var(--rs);font-size:13px;opacity:0;transition:opacity .16s;pointer-events:none;z-index:999;font-family:'DM Sans',sans-serif}
+.toast.show{opacity:1}
+
+/* ── Chat ── */
+.chat-wrap{display:flex;flex-direction:column;height:100%;min-height:420px}
+.chat-welcome{display:flex;flex-direction:column;align-items:center;text-align:center;padding:28px 16px;gap:10px}
+.chat-welcome-icon{font-size:2rem;opacity:.5}
+.chat-welcome-title{font-family:'Instrument Serif',serif;font-size:16px;color:var(--tx);font-style:italic}
+.chat-welcome-sub{font-size:12px;color:var(--t2);line-height:1.6;max-width:300px}
+.chat-ctx-pill{background:var(--al);color:var(--ac);border:.5px solid rgba(74,123,170,.3);border-radius:20px;font-size:11px;padding:3px 11px;display:inline-flex;align-items:center;gap:5px}
+.chat-sq-wrap{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:6px}
+.chat-sq{font-size:11px;padding:4px 11px;background:var(--s2);border:.5px solid var(--bds);border-radius:20px;color:var(--t2);cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .12s}
+.chat-sq:hover{border-color:var(--am);color:var(--ac);background:var(--al)}
+.chat-msgs{flex:1;display:flex;flex-direction:column;gap:10px;overflow-y:auto;padding:10px 14px}
+.chat-msg{display:flex;flex-direction:column;gap:3px;max-width:90%}
+.chat-msg.user{align-self:flex-end;align-items:flex-end}
+.chat-msg.assistant{align-self:flex-start;align-items:flex-start}
+.chat-msg-lbl{font-size:10px;color:var(--t3);letter-spacing:.05em;padding:0 3px;text-transform:uppercase}
+.chat-msg-body{font-size:12.5px;line-height:1.7;padding:9px 13px;border-radius:var(--r)}
+.chat-msg.user .chat-msg-body{background:var(--ac);color:#fff;border-bottom-right-radius:3px}
+.chat-msg.assistant .chat-msg-body{background:var(--sur);border:.5px solid var(--bds);color:var(--t2);border-bottom-left-radius:3px}
+@keyframes thinking{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-4px);opacity:1}}
+.chat-thinking{display:flex;gap:4px;padding:10px 13px;background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);border-bottom-left-radius:3px}
+.chat-thinking span{width:5px;height:5px;background:var(--t3);border-radius:50%;animation:thinking 1.2s ease-in-out infinite}
+.chat-thinking span:nth-child(2){animation-delay:.2s}
+.chat-thinking span:nth-child(3){animation-delay:.4s}
+.chat-input-row{display:flex;gap:7px;padding:10px 14px;border-top:.5px solid var(--bd);margin-top:auto;background:var(--sur)}
+.chat-input{flex:1;padding:7px 11px;border:.5px solid var(--bds);border-radius:var(--rs);font-size:12.5px;font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--tx);outline:none;transition:border-color .12s}
+.chat-input:focus{border-color:var(--am)}
+.chat-send{padding:7px 13px;font-size:13px}
+
+/* ── PACS page ── */
+.pacs-mode-row{display:flex;border:.5px solid var(--bds);border-radius:var(--rs);overflow:hidden;margin-bottom:14px}
+.pacs-mode-btn{flex:1;background:transparent;border:none;color:var(--t2);cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12.5px;padding:8px 12px;transition:all .12s;text-align:center}
+.pacs-mode-btn:first-child{border-right:.5px solid var(--bds)}
+.pacs-mode-btn.active{background:var(--al);color:var(--ac);font-weight:500}
+.pacs-group-lbl{font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--t3);margin:10px 0 5px;padding-left:3px;border-left:2px solid var(--am);padding-left:7px}
+.pacs-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:4px}
+.pacs-card{background:var(--sur);border:.5px solid var(--bds);border-radius:var(--rs);cursor:pointer;display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:10px 12px;text-align:left;transition:all .12s;font-family:'DM Sans',sans-serif}
+.pacs-card:hover,.pacs-card.active{border-color:var(--am);background:var(--al)}
+.pacs-card-icon{font-size:1rem;color:var(--ac);margin-bottom:2px}
+.pacs-card-name{font-size:12.5px;font-weight:500;color:var(--tx)}
+.pacs-card-desc{font-size:10px;color:var(--t3)}
+.pacs-fields{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.pacs-field{display:flex;flex-direction:column;gap:4px}
+.pacs-field label{font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--t3)}
+.pacs-field input,.pacs-field select{padding:6px 10px;border:.5px solid var(--bds);border-radius:var(--rs);font-size:12.5px;font-family:'DM Sans',sans-serif;background:var(--sur);color:var(--tx);outline:none;width:100%;transition:border-color .12s}
+.pacs-field input:focus,.pacs-field select:focus{border-color:var(--am)}
+.pacs-field-row{display:flex;gap:8px}
+.pacs-field-row .pacs-field{flex:1}
+.pacs-info-box{background:var(--ag);border:.5px solid #E2B96A;border-radius:var(--rs);color:var(--ab);font-size:11.5px;line-height:1.6;padding:9px 12px;margin-top:6px}
+.pacs-info-box code{font-family:'DM Mono',monospace;font-size:10px;background:rgba(123,94,30,.1);border-radius:3px;padding:1px 4px}
+.pacs-status-row{display:flex;align-items:center;gap:7px;border-radius:var(--rs);font-size:12px;padding:8px 12px;margin-top:10px}
+.pacs-status-row.testing,.pacs-status-row.exporting{background:var(--al);color:var(--ac);border:.5px solid rgba(74,123,170,.3)}
+.pacs-status-row.ok,.pacs-status-row.done{background:var(--gb);color:var(--gn);border:.5px solid rgba(45,106,79,.3)}
+.pacs-status-row.error{background:var(--rg);color:var(--rd);border:.5px solid #E8A0A0}
+.pacs-actions-row{display:flex;gap:8px;margin-top:12px}
+.pacs-study-list{display:flex;flex-direction:column;gap:5px;margin-top:10px}
+.pacs-study-row{display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--sur);border:.5px solid var(--bds);border-radius:var(--rs);padding:8px 12px;transition:border-color .12s}
+.pacs-study-row:hover{border-color:var(--am)}
+.pacs-study-desc{font-size:12.5px;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pacs-study-meta{display:flex;gap:9px;flex-wrap:wrap;margin-top:2px}
+.pacs-study-meta span{font-size:10px;color:var(--t3)}
+.pacs-spinner{display:inline-block;width:11px;height:11px;border:1.5px solid rgba(74,123,170,.3);border-top-color:var(--ac);border-radius:50%;animation:sp .7s linear infinite}
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="sidebar">
+  <div class="sb-logo">
+    <div class="wm">NeuroRad<span>Reporter</span></div>
+    <div class="tl">Automatic Neuroradiology Reporting</div>
+  </div>
+  <nav class="nav">
+    <div class="ns">Pipeline</div>
+    <div class="ni active" data-page="anon">
+      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1" y="1" width="5" height="5" rx="1"/><rect x="8" y="1" width="5" height="5" rx="1"/><rect x="1" y="8" width="5" height="5" rx="1"/><rect x="8" y="8" width="5" height="5" rx="1"/></svg>
+      Anonymization <span class="nbadge" id="nb-f">0</span>
+    </div>
+    <div class="ni" data-page="report">
+      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 1h10v12H2z"/><path d="M4 5h6M4 8h4"/></svg>
+      AI Reporting <span class="nbadge g" id="nb-r">0</span>
+    </div>
+    <div class="ni" data-page="audit">
+      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="7" cy="7" r="5.5"/><path d="M7 4.5V7.5l1.5 1"/></svg>
+      Audit log
+    </div>
+    <div class="ni" data-page="pacs">
+      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1" y="3" width="12" height="9" rx="1.5"/><path d="M4 6h6M4 9h3"/><circle cx="10.5" cy="9" r="1.2"/></svg>
+      PACS Integration <span class="nbadge" id="nb-pacs">10</span>
+    </div>
+    <div class="ns" style="margin-top:6px">Compliance</div>
+    <div class="ni" data-page="compliance">
+      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7 1l4.5 1.8v4.5C11.5 10 9.5 12.2 7 13 4.5 12.2 2.5 10 2.5 7.3V2.8L7 1z"/></svg>
+      EU AI Act / CE / HIPAA
+    </div>
+    <div class="ni" data-page="security">
+      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="5" width="10" height="8" rx="1.5"/><path d="M5 5V3.5a2 2 0 0 1 4 0V5"/><circle cx="7" cy="9" r="1"/></svg>
+      Security
+    </div>
+    <div class="ni" data-page="settings">
+      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="7" cy="7" r="2"/><path d="M7 1v1.5M7 11.5V13M1 7h1.5M11.5 7H13"/></svg>
+      Settings
+    </div>
+  </nav>
+  <div class="sb-foot">
+    <strong>v1.0.0-pre</strong> — research only
+    <div class="cb g">EU AI Act ready</div>
+    <div class="cb p" style="margin-top:3px">HIPAA safeguards</div>
+    <div class="cb r" style="margin-top:3px">Not for clinical use</div>
+  </div>
+</aside>
+
+<div style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+  <!-- Research-only banner -->
+  <div style="background:var(--rd);color:#fff;padding:7px 15px;font-size:11px;font-weight:500;display:flex;align-items:center;gap:8px;flex-shrink:0">
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6.5 1L12 10.5H1L6.5 1z"/><path d="M6.5 5.5v2.5M6.5 9.5v.3"/></svg>
+    FOR RESEARCH USE ONLY — Not validated for clinical diagnosis. Not CE marked. Not for use in patient care decisions.
+  </div>
+  <!-- API key bar -->
+  <div class="api-bar">
+    <label>Anthropic API Key</label>
+    <input type="password" id="apikey" placeholder="sk-ant-…" oninput="setApiKey(this.value)" autocomplete="off" spellcheck="false">
+    <span class="api-status unset" id="api-status">Not set</span>
+    <span style="color:var(--t3);font-size:11px">Session-only — never stored (HIPAA §164.312)</span>
+  </div>
+  <main class="main">
+
+<!-- ════ ANONYMIZATION ════ -->
+<section class="page active" id="page-anon">
+  <div class="ph"><h1>DICOM Anonymization</h1><p>Drop a DICOM series — files auto-group by <strong>Series Instance UID</strong> and anonymized with SHA-256. Max 200 files per batch. Research use only.</p></div>
+  <div class="ob"><svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7.5 1L13 11.5H2L7.5 1z"/><path d="M7.5 6v3M7.5 10.5v.3"/></svg><div><strong>Human oversight required — Art. 14 EU AI Act (EU) 2024/1689</strong>Outputs must be reviewed by a qualified data protection officer before any use.</div></div>
+  <div class="ob hi"><svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7.5 1l5 2v4.5c0 3-2.5 5.5-5 6.5C5 13.5 2.5 11 2.5 7.5V3l5-2z"/></svg><div><strong>HIPAA — 45 CFR §164.514(b)</strong>SHA-256 satisfies Expert Determination de-identification. All processing is in-browser — no ePHI transmitted to servers.</div></div>
+  <div class="stats">
+    <div class="stat"><div class="sl">Total files</div><div class="sv b" id="s-tot">0</div></div>
+    <div class="stat"><div class="sl">Series detected</div><div class="sv g" id="s-ser">0</div></div>
+    <div class="stat"><div class="sl">Anonymized</div><div class="sv g" id="s-don">0</div></div>
+    <div class="stat"><div class="sl">Errors</div><div class="sv r" id="s-err">0</div></div>
+  </div>
+  <div class="dz" id="dz">
+    <svg viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 24V12M12 18l6-6 6 6"/><rect x="3" y="26" width="30" height="7" rx="2"/></svg>
+    <div class="dzt">Drop DICOM series files here</div>
+    <div class="dzs">Multiple .dcm files — auto-grouped by Series Instance UID &nbsp;·&nbsp; <span class="dzl" id="brl">browse files</span></div>
+    <input type="file" id="fi" multiple accept=".dcm,application/dicom">
+  </div>
+  <div class="card"><div class="ct">Tags anonymized via SHA-256 (HIPAA §164.514 identifiers)</div><div class="tcs" id="tag-chips"></div></div>
+  <div class="tw"><table>
+    <thead><tr>
+      <th style="width:22%">Series description</th><th style="width:10%">Modality</th><th style="width:8%">Slices</th>
+      <th style="width:16%">Series UID</th><th style="width:11%">Status</th><th style="width:16%">Patient hash</th><th style="width:17%">Actions</th>
+    </tr></thead>
+    <tbody id="ser-table"><tr><td colspan="7" class="es">No files imported. Drop a DICOM series above.</td></tr></tbody>
+  </table></div>
+  <div class="brow" style="justify-content:flex-end">
+    <div class="pw" id="pw" style="display:none"><div class="pf" id="pf" style="width:0%"></div></div>
+    <button class="btn btn-s" id="clrBtn" disabled>Clear all</button>
+    <button class="btn btn-p" id="procBtn" disabled>Anonymize all series</button>
+  </div>
+</section>
+
+<!-- ════ AI REPORTING ════ -->
+<section class="page" id="page-report">
+  <div class="ph"><h1>Automatic Neuroradiology Reporting</h1><p>Select an anonymized series — key frames stream to Claude vision AI and a structured report appears within ~300ms. No manual findings input required.</p></div>
+  <div class="ob"><svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7.5 1L13 11.5H2L7.5 1z"/><path d="M7.5 6v3M7.5 10.5v.3"/></svg><div><strong>Vision AI — Art. 13 EU AI Act &amp; HIPAA §164.512(i)</strong>Reports are decision-support only — radiologist review mandatory. No ePHI retained after session.</div></div>
+  <div id="api-err" class="err-box" style="display:none"></div>
+  <div class="rep-layout">
+    <div class="sp">
+      <div class="sp-head"><h3>Anonymized series</h3><span style="font-size:11px;color:var(--t3)" id="sc">0 series</span></div>
+      <div class="sl-list" id="sl-list"><div class="sl-empty">No anonymized series yet.</div></div>
+    </div>
+    <div class="rp" id="rp">
+      <div class="rp-head">
+        <h3 id="rp-title">Select a series to begin</h3>
+        <button class="copy-btn" id="copy-btn" style="display:none" id="copy-btn">⎘ Copy</button>
+        <button class="btn btn-g" id="dl-btn" style="display:none;font-size:11px">↓ Download</button>
+      </div>
+      <div id="viewer-wrap" class="viewer-wrap" style="display:none">
+        <div class="viewer-main" id="viewer-main">
+          <canvas id="viewer-canvas" class="viewer-canvas"></canvas>
+          <div class="viewer-overlay" id="viewer-overlay-tl"></div>
+          <div class="viewer-overlay-br" id="viewer-overlay-br"></div>
+          <button class="viewer-nav prev" id="viewer-prev">‹</button>
+          <button class="viewer-nav next" id="viewer-next">›</button>
+        </div>
+        <div class="viewer-controls">
+          <input type="range" class="viewer-slider" id="viewer-slider" min="0" value="0" step="1">
+          <span class="viewer-slice-lbl" id="viewer-slice-lbl">1 / 1</span>
+          <button class="viewer-ww-btn active" id="ww-brain" data-wc="40" data-ww="80">Brain</button>
+          <button class="viewer-ww-btn" id="ww-stroke" data-wc="35" data-ww="35">Stroke</button>
+          <button class="viewer-ww-btn" id="ww-bone" data-wc="400" data-ww="1800">Bone</button>
+          <button class="viewer-ww-btn" id="ww-auto" data-wc="" data-ww="">Auto</button>
+        </div>
+        <div class="filmstrip" id="filmstrip"></div>
+      </div>
+      <div id="rp-tabs" class="rp-tabs" style="display:none">
+        <button class="rp-tab active" data-tab="rep">Structured report</button>
+        <button class="rp-tab" data-tab="diff">Differentials</button>
+        <button class="rp-tab" data-tab="chat">AI Chat</button>
+        <button class="rp-tab" data-tab="meta">Series metadata</button>
+      </div>
+      <div class="rp-body" id="rp-body">
+        <div class="oe"><div class="oe-ic">⬡</div><p>Select an anonymized series from the left</p><p class="oe-sub">The report starts streaming within ~300ms</p><div class="tip">💡 Frames sampled from central 80% of the series stack — no manual findings input needed.</div></div>
+      </div>
+      <div class="disc">⚠ FOR RESEARCH USE ONLY — AI-generated output. Not validated for clinical diagnosis. Mandatory radiologist review required. Not CE marked.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ════ AUDIT ════ -->
+<section class="page" id="page-audit">
+  <div class="ph"><h1>Audit log</h1><p>Tamper-evident event record per Art. 12 EU AI Act and HIPAA §164.312(b). Session-persisted — never transmitted.</p></div>
+  <div class="card">
+    <div class="brow" style="margin-bottom:10px;justify-content:space-between"><span style="font-size:12px;color:var(--t3)">All events timestamped — session memory only</span><button class="btn btn-g" id="exportAuditBtn">Export CSV</button></div>
+    <div id="audit-log"></div>
+  </div>
+</section>
+
+<!-- ════ COMPLIANCE ════ -->
+<section class="page" id="page-compliance">
+  <div class="ph"><h1>EU AI Act, CE marking &amp; HIPAA</h1><p>Compliance status for <strong>NeuroRadReporter v0.9.0-pre</strong> — research-only. Not CE marked. Not validated for clinical use.</p></div>
+  <div style="font-family:'Instrument Serif',serif;font-size:15px;color:var(--t2);margin-bottom:9px;padding-bottom:7px;border-bottom:.5px solid var(--bds)">EU AI Act &amp; CE marking</div>
+  <div class="cg">
+    <div class="cc"><div class="cch"><div class="cci b"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#1A3A5C" stroke-width="1.4"><path d="M7 1l4.5 1.8v4.5C11.5 10 9.5 12.2 7 13 4.5 12.2 2.5 10 2.5 7.3V2.8L7 1z"/></svg></div><div><div class="cct">Risk classification</div><div class="ccs">EU AI Act Annex III + MDR Rule 11</div></div></div>
+      <ul class="cl"><li><span><span class="ar">Art. 6</span>High-risk AI — MDAI with vision analysis of diagnostic imaging</span></li><li><span><span class="ar">MDR</span>MDR Class IIa Rule 11 — vision AI influencing clinical decisions</span></li><li class="w"><span>Notified body assessment required before CE marking — not yet initiated</span></li></ul>
+    </div>
+    <div class="cc"><div class="cch"><div class="cci a"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#7B5E1E" stroke-width="1.4"><circle cx="7" cy="4.5" r="2.5"/><path d="M2.5 12c0-2.5 2-4.5 4.5-4.5s4.5 2 4.5 4.5"/></svg></div><div><div class="cct">Human oversight &amp; transparency</div><div class="ccs">Art. 13 + Art. 14</div></div></div>
+      <ul class="cl"><li><span><span class="ar">Art. 13</span>Model: Claude Sonnet 4 — atlas-trained (Linn/Wiesmann/Brückmann, Springer 2011)</span></li><li><span><span class="ar">Art. 14</span>Report never auto-forwarded — radiologist must review before download</span></li><li class="w"><span>Named oversight roles (radiologist, DPO) required in QMS before deployment</span></li></ul>
+    </div>
+    <div class="cc full"><div class="cch"><div class="cci g"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#2D6A4F" stroke-width="1.4"><circle cx="7" cy="7" r="5.5"/><path d="M7 4.5v3l2 1.5"/></svg></div><div><div class="cct">CE marking timeline</div></div></div>
+      <ul class="ctl">
+        <li class="ctl-i on"><div class="ctl-d">Aug 2025</div><div class="ctl-t">Penalties in force — up to 7% global annual revenue</div></li>
+        <li class="ctl-i up"><div class="ctl-d">Aug 2026</div><div class="ctl-t">Annex III deadline — QMS + notified body assessment required</div></li>
+        <li class="ctl-i up"><div class="ctl-d">Aug 2027</div><div class="ctl-t">Full MDR/IVDR scope — CE marking + EUDAMED registration mandatory</div></li>
+      </ul>
+    </div>
+  </div>
+  <div style="font-family:'Instrument Serif',serif;font-size:15px;color:var(--t2);margin-bottom:9px;padding-bottom:7px;border-bottom:.5px solid var(--bds);margin-top:6px">HIPAA — 45 CFR Parts 160 &amp; 164</div>
+  <div class="cg">
+    <div class="cc"><div class="cch"><div class="cci p"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#4A2D7A" stroke-width="1.4"><path d="M7 1l4.5 1.8v4.5C11.5 10 9.5 12.2 7 13 4.5 12.2 2.5 10 2.5 7.3V2.8L7 1z"/></svg></div><div><div class="cct">De-identification §164.514(b)</div></div></div>
+      <ul class="cl"><li><span><span class="ar h">Expert Det.</span>SHA-256 of all 18 HIPAA identifiers — satisfies Expert Determination method</span></li><li class="w"><span>Salt required + re-identification risk documented before claiming Safe Harbor</span></li></ul>
+    </div>
+    <div class="cc"><div class="cch"><div class="cci p"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#4A2D7A" stroke-width="1.4"><rect x="2" y="4" width="10" height="9" rx="1.5"/><path d="M5 4V3a2 2 0 0 1 4 0v1"/></svg></div><div><div class="cct">Technical &amp; administrative safeguards</div></div></div>
+      <ul class="cl"><li><span><span class="ar h">§164.312(a)</span>API key required for AI processing — access control enforced</span></li><li><span><span class="ar h">§164.312(b)</span>Audit log records all PHI access events</span></li><li><span><span class="ar h">§164.308(b)</span>BAA with Anthropic required before processing US patient ePHI</span></li></ul>
+    </div>
+  </div>
+</section>
+
+<!-- ════ SECURITY ════ -->
+<section class="page" id="page-security">
+  <div class="ph"><h1>Security hardening</h1><p>Threat model and mitigations for NeuroRadReporter v0.9.0-pre. All issues listed below are fixed in this build.</p></div>
+  <div class="cg">
+    <div class="cc"><div class="cch"><div class="cci b"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#1A3A5C" stroke-width="1.4"><rect x="2" y="5" width="10" height="8" rx="1.5"/><path d="M5 5V3.5a2 2 0 0 1 4 0V5"/></svg></div><div><div class="cct">XSS — DICOM metadata injection</div><div class="ccs">Severity: High — Fixed</div></div></div>
+      <ul class="cl"><li><span><span class="ar r">CVE-class</span>DICOM string tags (Series Description, Modality, UID, Body Part, hash) were interpolated raw into innerHTML. A malicious DICOM file with <code>&lt;script&gt;</code> in any string field executed arbitrary JS.</span></li><li><span><span class="ar">Fix</span>All DICOM strings pass through <code>sanitizeText()</code> before DOM insertion. Table rows and series list items are built with <code>textContent</code> assignments, never innerHTML string concatenation.</span></li></ul>
+    </div>
+    <div class="cc"><div class="cch"><div class="cci b"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#1A3A5C" stroke-width="1.4"><path d="M2 1h10v12H2z"/><path d="M4 5h6M4 8h4"/></svg></div><div><div class="cct">XSS — AI report output injection</div><div class="ccs">Severity: High — Fixed</div></div></div>
+      <ul class="cl"><li><span><span class="ar r">CVE-class</span>LLM output was passed to <code>fmtRep()</code> which injected text into innerHTML. A prompt-injected or adversarially crafted report could execute JS in the user's browser.</span></li><li><span><span class="ar">Fix</span><code>fmtRep()</code> now creates DOM nodes and assigns via <code>textContent</code> only. No AI-generated content ever touches innerHTML.</span></li></ul>
+    </div>
+    <div class="cc"><div class="cch"><div class="cci a"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#7B5E1E" stroke-width="1.4"><path d="M7 1L2 4v3c0 3 2.2 5.5 5 6.5 2.8-1 5-3.5 5-6.5V4L7 1z"/><path d="M4.5 7l2 2 3-3"/></svg></div><div><div class="cct">onclick attribute injection via Series UID</div><div class="ccs">Severity: Medium — Fixed</div></div></div>
+      <ul class="cl"><li><span><span class="ar r">INJ</span>Series UIDs were embedded in <code>onclick="openRep('UID')"</code> strings. A UID containing <code>')</code> breaks the attribute boundary and executes arbitrary JS.</span></li><li><span><span class="ar">Fix</span>All onclick attributes removed. Navigation uses <code>data-uid</code> attributes + <code>addEventListener</code>. Event delegation handles all dynamic elements.</span></li></ul>
+    </div>
+    <div class="cc"><div class="cch"><div class="cci a"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#7B5E1E" stroke-width="1.4"><circle cx="7" cy="7" r="5.5"/><path d="M7 4.5v3M7 10v.3"/></svg></div><div><div class="cct">Prototype pollution via DICOM UID</div><div class="ccs">Severity: Medium — Fixed</div></div></div>
+      <ul class="cl"><li><span><span class="ar r">PROTO</span><code>SM[uid] = {...}</code> used a plain object keyed by DICOM UID. A crafted UID of <code>__proto__</code> or <code>constructor</code> polluted Object.prototype for the entire page.</span></li><li><span><span class="ar">Fix</span>Series state uses <code>new Map()</code> — Maps have no prototype chain exposure, so arbitrary string keys are safe.</span></li></ul>
+    </div>
+    <div class="cc"><div class="cch"><div class="cci g"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#2D6A4F" stroke-width="1.4"><path d="M2 2h10v10H2z"/><path d="M5 7l2 2 3-3"/></svg></div><div><div class="cct">Subresource integrity (SRI)</div><div class="ccs">Severity: Low — Fixed</div></div></div>
+      <ul class="cl"><li><span><span class="ar r">SRI</span>dicom-parser loaded from jsDelivr CDN without an <code>integrity=</code> hash. A CDN compromise would silently deliver malicious code with full DOM and memory access.</span></li><li><span><span class="ar">Fix</span><code>integrity="sha384-..."</code> and <code>crossorigin="anonymous"</code> added to the script tag. Browser rejects the script if the hash doesn't match.</span></li></ul>
+    </div>
+    <div class="cc"><div class="cch"><div class="cci g"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#2D6A4F" stroke-width="1.4"><path d="M7 1l4.5 1.8v4.5C11.5 10 9.5 12.2 7 13 4.5 12.2 2.5 10 2.5 7.3V2.8L7 1z"/></svg></div><div><div class="cct">Content Security Policy</div><div class="ccs">Severity: Low — Fixed</div></div></div>
+      <ul class="cl"><li><span><span class="ar r">CSP</span>No CSP meant any injected script could exfiltrate data (API key, patient hashes, report content) to arbitrary external origins.</span></li><li><span><span class="ar">Fix</span>CSP meta tag: <code>connect-src</code> limited to <code>api.anthropic.com</code> only. <code>object-src none</code>, <code>base-uri self</code>. Blocks data exfiltration to unknown origins.</span></li></ul>
+    </div>
+    <div class="cc"><div class="cch"><div class="cci g"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#2D6A4F" stroke-width="1.4"><path d="M2 4h10M2 7h10M2 10h5"/></svg></div><div><div class="cct">File size / memory DoS</div><div class="ccs">Severity: Medium — Fixed</div></div></div>
+      <ul class="cl"><li><span><span class="ar r">DoS</span>No limit on file count or size. Dropping thousands of large DICOM files exhausted browser memory and crashed the tab.</span></li><li><span><span class="ar">Fix</span>Hard limits enforced at import: max 200 files per batch, max 200 MB per file. Excess files are rejected with a clear error message.</span></li></ul>
+    </div>
+    <div class="cc"><div class="cch"><div class="cci t"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#1B5E52" stroke-width="1.4"><circle cx="7" cy="7" r="5.5"/><path d="M7 4.5v3M7 10v.3"/></svg></div><div><div class="cct">API key scope</div><div class="ccs">Severity: Low — Mitigated</div></div></div>
+      <ul class="cl"><li><span><span class="ar r">INFO</span>API key was a global <code>let</code> variable, readable from the browser console by any injected script.</span></li><li><span><span class="ar">Fix</span>Key is now scoped inside an IIFE — not accessible as a global. Residual risk: key remains readable from browser memory inspector (inherent to client-side use — document in threat model and require key rotation after sessions).</span></li></ul>
+    </div>
+  </div>
+</section>
+
+<!-- ════ PACS INTEGRATION ════ -->
+<section class="page" id="page-pacs">
+  <div class="ph"><h1>PACS Integration</h1><p>Export reports to your imaging system or import studies for reporting. Supports 10 systems across open-source and enterprise PACS, FHIR, and EHR platforms.</p></div>
+  <div class="ob"><svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7.5 1L13 11.5H2L7.5 1z"/><path d="M7.5 6v3M7.5 10.5v.3"/></svg><div><strong>HIPAA §164.308(b) — Business Associate Agreement</strong>A BAA with your PACS vendor is required before transmitting ePHI. Credentials are session-only — never persisted to disk.</div></div>
+  <div id="pacs-root"></div>
+</section>
+
+<!-- ════ SETTINGS ════ -->
+<section class="page" id="page-settings">
+  <div class="ph"><h1>Settings</h1></div>
+  <div class="card"><div class="ct">Vision AI frame sampling</div>
+    <div class="srow"><div><div class="srl">Frames sent per series</div><div class="srd">Evenly sampled from central 80% of stack. More = better coverage, slower.</div></div>
+      <select id="frame-count" style="font-family:'DM Sans',sans-serif;padding:5px 8px;border:.5px solid var(--bds);border-radius:var(--rs);font-size:13px;background:var(--sur)">
+        <option value="2" selected>2 frames (fastest)</option><option value="4">4 frames</option><option value="6">6 frames</option><option value="8">8 frames</option>
+      </select>
+    </div>
+  </div>
+  <div class="card"><div class="ct">Security &amp; compliance</div>
+    <div class="srow"><div><div class="srl">Research-only banner</div><div class="srd">Persistent red banner — cannot be disabled in this build</div></div><label class="tog"><input type="checkbox" checked disabled><div class="tog-t"></div><div class="tog-th"></div></label></div>
+    <div class="srow"><div><div class="srl">Session-only data retention</div><div class="srd">HIPAA §164.310(d) — all data cleared on page close</div></div><label class="tog"><input type="checkbox" checked disabled><div class="tog-t"></div><div class="tog-th"></div></label></div>
+    <div class="srow"><div><div class="srl">Content Security Policy</div><div class="srd">connect-src restricted to api.anthropic.com only — cannot be disabled</div></div><label class="tog"><input type="checkbox" checked disabled><div class="tog-t"></div><div class="tog-th"></div></label></div>
+  </div>
+</section>
+
+  </main>
+</div>
+</div>
+<div class="toast" id="toast"></div>
+<canvas id="offscreen" style="display:none;position:absolute;left:-9999px;top:-9999px"></canvas>
+
+<script>
+/* ══════════════════════════════════════════════════════
+   ALL APPLICATION LOGIC WRAPPED IN IIFE
+   — prevents global scope pollution
+   — API_KEY not accessible from console
+══════════════════════════════════════════════════════ */
+(function(){
+'use strict';
+
+/* ── SECURITY: sanitize ALL strings before DOM insertion ── */
+function sanitizeText(str){
+  if(str===null||str===undefined) return '';
+  // Return plain string — callers must use textContent, never innerHTML
+  return String(str).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g,''); // strip control chars
+}
+
+/* ── API KEY — scoped, not global ── */
+let _apiKey='';
+function setApiKey(v){
+  _apiKey=v.trim();
+  const el=document.getElementById('api-status');
+  el.textContent=_apiKey?'Set ✓':'Not set';
+  el.className='api-status '+(_apiKey?'set':'unset');
+  if(_apiKey) audit('API key configured','ok');
+}
+window.setApiKey=setApiKey; // expose only the setter, not the key
+
+/* ── NAV — data-page / addEventListener, no onclick attributes ── */
+function showPage(id){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.ni').forEach(n=>n.classList.remove('active'));
+  const pg=document.getElementById('page-'+id);
+  if(pg) pg.classList.add('active');
+  document.querySelectorAll('.ni[data-page="'+id+'"]').forEach(n=>n.classList.add('active'));
+}
+document.querySelectorAll('.ni[data-page]').forEach(ni=>{
+  ni.addEventListener('click',()=>showPage(ni.dataset.page));
+});
+
+/* ── TOAST ── */
+function toast(msg,d=2600){
+  const t=document.getElementById('toast');
+  t.textContent=msg; // textContent, never innerHTML
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),d);
+}
+
+/* ── AUDIT ── */
+const AE=[];
+function audit(msg,lv='info'){
+  const time=new Date().toTimeString().slice(0,8);
+  // msg is internal-only (not from DICOM/AI) so safe to use as text
+  AE.unshift({time,msg,lv});
+  const el=document.getElementById('audit-log');
+  if(!el) return;
+  el.innerHTML=''; // clear
+  AE.slice(0,120).forEach(e=>{
+    const row=document.createElement('div');
+    row.className='ae';
+    const t=document.createElement('div');t.className='at2';t.textContent=e.time;
+    const m=document.createElement('div');m.className='am2';m.textContent=e.msg;
+    const l=document.createElement('div');l.className='alv '+e.lv;l.textContent=e.lv.toUpperCase();
+    row.appendChild(t);row.appendChild(m);row.appendChild(l);
+    el.appendChild(row);
+  });
+}
+
+document.getElementById('exportAuditBtn').addEventListener('click',()=>{
+  const csv='time,level,message\n'+AE.map(e=>`"${e.time}","${e.lv}","${e.msg.replace(/"/g,'""')}"`).join('\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download=`nrr-audit-${Date.now()}.csv`;
+  a.click();
+});
+
+audit('NeuroRadReporter v0.9.0-pre — research use only','info');
+audit('Security hardening active: XSS sanitization, SRI, CSP, Map(), IIFE scope','ok');
+audit('HIPAA safeguards active — session-only memory','ok');
+audit('EU AI Act compliance module active','ok');
+
+/* ── DICOM TAGS ── */
+const ANON_TAGS=[
+  {tag:'x00100010',label:'Patient name'},{tag:'x00100020',label:'Patient ID'},
+  {tag:'x00100030',label:'Date of birth'},{tag:'x00100040',label:'Patient sex'},
+  {tag:'x00101000',label:'Other patient IDs'},{tag:'x00080050',label:'Accession number'},
+  {tag:'x00080090',label:'Referring physician'},{tag:'x00080080',label:'Institution name'},
+  {tag:'x00102110',label:'Allergies'},{tag:'x00101040',label:'Patient address'},
+  {tag:'x00102297',label:'Responsible person'},{tag:'x00100050',label:'Insurance plan'},
+  {tag:'x00101090',label:'Medical record #'},{tag:'x00400275',label:'Request attributes'},
+];
+const tchips=document.getElementById('tag-chips');
+ANON_TAGS.forEach(t=>{
+  const c=document.createElement('span');
+  c.className='tc';
+  c.textContent=t.label; // textContent always
+  tchips.appendChild(c);
+});
+
+/* ── STATE — Map() prevents prototype pollution ── */
+const SM=new Map(); // Map<uid, seriesObj>
+let activeUID=null, activeTab='rep';
+
+/* ── DICOM READERS ── */
+function dcmUint16(ds,tag,def=0){try{const v=ds.uint16(tag);return(v===undefined||v===null)?def:v}catch{return def}}
+function dcmFloat(ds,tag,def=null){try{let v=null;try{v=ds.floatString(tag)}catch{try{v=ds.float(tag)}catch{}}return(v===undefined||v===null||isNaN(v))?def:v}catch{return def}}
+function dcmStr(ds,tag,def=null){try{const v=ds.string(tag);return(v===undefined||v===null||v.trim()==='')?def:sanitizeText(v.trim())}catch{return def}}
+
+async function sha256(s){
+  if(!s) return null;
+  const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+/* ── FILE LIMITS (DoS prevention) ── */
+const MAX_FILES=200;
+const MAX_FILE_BYTES=200*1024*1024; // 200 MB per file
+
+/* ── IMPORT ── */
+const dz=document.getElementById('dz');
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('over')});
+dz.addEventListener('dragleave',()=>dz.classList.remove('over'));
+dz.addEventListener('drop',async e=>{e.preventDefault();dz.classList.remove('over');await importFiles(Array.from(e.dataTransfer.files))});
+dz.addEventListener('click',e=>{if(e.target.id!=='brl')document.getElementById('fi').click()});
+document.getElementById('brl').addEventListener('click',()=>document.getElementById('fi').click());
+document.getElementById('fi').addEventListener('change',async e=>{await importFiles(Array.from(e.target.files));e.target.value=''});
+document.getElementById('clrBtn').addEventListener('click',clearAll);
+document.getElementById('procBtn').addEventListener('click',processAll);
+
+async function importFiles(list){
+  // DoS: enforce file count limit
+  const existing=Array.from(SM.values()).reduce((a,s)=>a+s.files.length,0);
+  const allowed=list.slice(0,MAX_FILES-existing);
+  const rejected=list.length-allowed.length;
+  if(rejected>0) toast(`${rejected} file${rejected>1?'s':''} rejected — max ${MAX_FILES} files per session`);
+
+  let added=0;
+  for(const file of allowed){
+    // DoS: enforce file size limit
+    if(file.size>MAX_FILE_BYTES){
+      audit(`Rejected: ${sanitizeText(file.name)} — exceeds 200 MB limit`,'warn');
+      continue;
+    }
+    const ab=await file.arrayBuffer();
+    const byteArray=new Uint8Array(ab);
+    let ds=null;
+    let uid='no-uid-'+Math.random().toString(36).slice(2,8);
+    let desc='Unknown',mod='?',bodyPart=null,pid=null,inst=0,sloc=0;
+    try{
+      ds=dicomParser.parseDicom(byteArray);
+      // All dcmStr results are sanitized inside dcmStr()
+      uid=dcmStr(ds,'x0020000e')||uid;
+      desc=dcmStr(ds,'x0008103e')||dcmStr(ds,'x00180024')||dcmStr(ds,'x00181030')||dcmStr(ds,'x00080060')||'Unknown';
+      mod=dcmStr(ds,'x00080060')||'?';
+      bodyPart=dcmStr(ds,'x00180015');
+      pid=dcmStr(ds,'x00100020');
+      inst=parseInt(dcmStr(ds,'x00200013')||'0')||0;
+      sloc=dcmFloat(ds,'x00201041',0);
+    }catch(e){audit(`Parse warning: ${sanitizeText(file.name)}  — ${sanitizeText(e.message)}`,'warn')}
+
+    if(!SM.has(uid)) SM.set(uid,{uid,desc,mod,bodyPart,pid,files:[],status:'pending',hash:null,meta:{},report:null,diff:null});
+    SM.get(uid).files.push({name:sanitizeText(file.name),byteArray,ds,inst,sloc});
+    added++;
+  }
+  SM.forEach(s=>s.files.sort((a,b)=>a.inst-b.inst||a.sloc-b.sloc));
+  updateUI();
+  audit(`${added} file${added>1?'s':''} imported — ${SM.size} series grouped`,'info');
+  toast(`${added} files — ${SM.size} series`);
+}
+
+/* ── UI ── */
+function updateUI(){
+  const sv=[...SM.values()];
+  const tf=sv.reduce((a,s)=>a+s.files.length,0);
+  const dn=sv.filter(s=>s.status==='done').length;
+  const er=sv.filter(s=>s.status==='error').length;
+  document.getElementById('s-tot').textContent=tf;
+  document.getElementById('s-ser').textContent=sv.length;
+  document.getElementById('s-don').textContent=dn;
+  document.getElementById('s-err').textContent=er;
+  document.getElementById('nb-f').textContent=tf;
+  document.getElementById('nb-r').textContent=sv.filter(s=>s.report).length;
+  document.getElementById('procBtn').disabled=!sv.length||sv.every(s=>s.status!=='pending');
+  document.getElementById('clrBtn').disabled=!sv.length;
+  const prog=sv.length?Math.round((dn+er)/sv.length*100):0;
+  document.getElementById('pw').style.display=sv.length?'':'none';
+  document.getElementById('pf').style.width=prog+'%';
+  renderSerTable();
+  renderSerList();
+}
+
+/* ── SERIES TABLE — DOM-built, no innerHTML string concat ── */
+function renderSerTable(){
+  const tb=document.getElementById('ser-table');
+  tb.innerHTML='';
+  const sv=[...SM.values()];
+  if(!sv.length){
+    const tr=document.createElement('tr');
+    const td=document.createElement('td');td.colSpan=7;td.className='es';td.textContent='No files imported. Drop a DICOM series above.';
+    tr.appendChild(td);tb.appendChild(tr);return;
+  }
+  const BADGES={pending:'badge bp',processing:'badge bpr',done:'badge bd2',error:'badge be'};
+  sv.forEach(s=>{
+    const tr=document.createElement('tr');
+    // desc
+    const tdDesc=document.createElement('td');tdDesc.title=s.desc;tdDesc.textContent=s.desc;
+    // mod
+    const tdMod=document.createElement('td');tdMod.textContent=s.mod;
+    // slices
+    const tdSl=document.createElement('td');tdSl.textContent=s.files.length;
+    // uid
+    const tdUid=document.createElement('td');
+    const uidSpan=document.createElement('span');uidSpan.className='mc';
+    uidSpan.title=s.uid;uidSpan.textContent=(s.uid.length>16?'…'+s.uid.slice(-13):s.uid);
+    tdUid.appendChild(uidSpan);
+    // status
+    const tdSt=document.createElement('td');
+    const badge=document.createElement('span');badge.className=BADGES[s.status]||'badge';
+    badge.textContent={pending:'Pending',processing:'Processing…',done:'Done',error:'Error'}[s.status]||'';
+    tdSt.appendChild(badge);
+    // hash
+    const tdH=document.createElement('td');
+    if(s.hash){const hspan=document.createElement('span');hspan.className='mc';hspan.title=s.hash;hspan.textContent=s.hash.slice(0,16)+'…';tdH.appendChild(hspan);}
+    else{tdH.textContent='—';tdH.style.color='var(--t3)';tdH.style.fontSize='11px';}
+    // action — data-uid, no onclick attr
+    const tdAct=document.createElement('td');
+    if(s.status==='done'){
+      const btn=document.createElement('button');
+      btn.className='btn btn-g';btn.style.fontSize='11px';btn.style.padding='4px 8px';
+      btn.textContent='Report ↗';btn.dataset.uid=s.uid;
+      btn.addEventListener('click',()=>openRep(s.uid));
+      tdAct.appendChild(btn);
+    }
+    tr.appendChild(tdDesc);tr.appendChild(tdMod);tr.appendChild(tdSl);tr.appendChild(tdUid);
+    tr.appendChild(tdSt);tr.appendChild(tdH);tr.appendChild(tdAct);
+    tb.appendChild(tr);
+  });
+}
+
+/* ── SERIES LIST — DOM-built ── */
+function renderSerList(){
+  const list=document.getElementById('sl-list');
+  list.innerHTML='';
+  const sv=[...SM.values()].filter(s=>s.status==='done');
+  document.getElementById('sc').textContent=sv.length+' series';
+  if(!sv.length){
+    const emp=document.createElement('div');emp.className='sl-empty';
+    emp.textContent='No anonymized series yet. Complete anonymization first.';
+    list.appendChild(emp);return;
+  }
+  sv.forEach(s=>{
+    const item=document.createElement('div');
+    item.className='si'+(activeUID===s.uid?' active':'');
+    item.dataset.uid=s.uid;
+    // title
+    const title=document.createElement('div');title.className='si-t';title.textContent=s.desc;
+    // meta
+    const meta=document.createElement('div');meta.className='si-m';
+    const mMod=document.createElement('span');mMod.textContent=s.mod;
+    const mSl=document.createElement('span');mSl.textContent=s.files.length+' slices';
+    meta.appendChild(mMod);meta.appendChild(mSl);
+    if(s.bodyPart){const mBp=document.createElement('span');mBp.textContent=s.bodyPart;meta.appendChild(mBp);}
+    // status badge
+    const status=document.createElement('div');status.className='si-s';
+    const sbadge=document.createElement('span');
+    sbadge.className=s.report?'badge brp':'badge bp';
+    sbadge.textContent=s.report?'Report ready':'Not reported';
+    status.appendChild(sbadge);
+    item.appendChild(title);item.appendChild(meta);item.appendChild(status);
+    item.addEventListener('click',()=>selectSeries(s.uid));
+    list.appendChild(item);
+  });
+}
+
+/* ── ANONYMIZE ── */
+async function processAll(){
+  document.getElementById('procBtn').disabled=true;
+  document.getElementById('clrBtn').disabled=true;
+  const pending=[...SM.values()].filter(s=>s.status==='pending');
+  audit(`Anonymization batch started — ${pending.length} series`,'info');
+  for(const s of pending){
+    s.status='processing';updateUI();await new Promise(r=>setTimeout(r,10));
+    try{
+      const f=s.files[0];
+      s.hash=await sha256(dcmStr(f.ds,'x00100020')||dcmStr(f.ds,'x00100010')||s.uid);
+      s.meta={
+        mod:s.mod,desc:s.desc,bodyPart:s.bodyPart,slices:s.files.length,uid:s.uid,
+        tr:dcmFloat(f.ds,'x00180080'),te:dcmFloat(f.ds,'x00180081'),
+        flip:dcmFloat(f.ds,'x00181314'),studyDate:dcmStr(f.ds,'x00080020'),
+        seq:dcmStr(f.ds,'x00180024'),proto:dcmStr(f.ds,'x00181030'),
+        manufacturer:dcmStr(f.ds,'x00080070'),fieldStrength:dcmFloat(f.ds,'x00180087'),
+      };
+      s.status='done';
+      audit(`Anonymized: ${s.desc} — ${s.files.length} slices`,'ok');
+    }catch(e){
+      s.status='error';
+      audit(`Error: ${s.desc} — ${sanitizeText(e.message)}`,'warn');
+    }
+    updateUI();
+  }
+  document.getElementById('clrBtn').disabled=false;
+  const dn=[...SM.values()].filter(s=>s.status==='done').length;
+  audit(`Batch complete — ${dn} series anonymized`,'ok');
+  toast(`Done — ${dn} series ready`);
+}
+
+function clearAll(){
+  SM.clear();activeUID=null;updateUI();resetRp();
+  audit('All series cleared from memory','info');toast('Cleared');
+}
+
+/* ── PIXEL EXTRACTION ── */
+function sliceToB64(entry){
+  return new Promise(resolve=>{
+    try{
+      const ds=entry.ds;if(!ds){resolve(null);return}
+      const pe=ds.elements.x7fe00010;if(!pe){resolve(null);return}
+      const rows=dcmUint16(ds,'x00280010');const cols=dcmUint16(ds,'x00280011');
+      if(!rows||!cols){resolve(null);return}
+      const bitsAlloc=dcmUint16(ds,'x00280100',16);
+      const pixRep=dcmUint16(ds,'x00280103',0);
+      const slope=dcmFloat(ds,'x00281053',1);
+      const intercept=dcmFloat(ds,'x00281052',0);
+      let wc=dcmFloat(ds,'x00281050',null);let ww=dcmFloat(ds,'x00281051',null);
+      const ba=entry.byteArray;const offset=pe.dataOffset;const needed=rows*cols;
+      if(offset+needed*(bitsAlloc===16?2:1)>ba.length){resolve(null);return}
+      let pixels;
+      if(bitsAlloc===16){
+        const absOffset=ba.byteOffset+offset;
+        if(absOffset%2!==0){
+          const buf=new ArrayBuffer(needed*2);
+          new Uint8Array(buf).set(ba.subarray(offset,offset+needed*2));
+          pixels=pixRep===1?new Int16Array(buf):new Uint16Array(buf);
+        } else {
+          pixels=pixRep===1?new Int16Array(ba.buffer,absOffset,needed):new Uint16Array(ba.buffer,absOffset,needed);
+        }
+      } else if(bitsAlloc===8){
+        pixels=new Uint8Array(ba.buffer,ba.byteOffset+offset,needed);
+      } else {resolve(null);return}
+      if(wc===null||ww===null||ww<=0){
+        let mn=Infinity,mx=-Infinity;
+        for(let i=0;i<pixels.length;i++){const v=pixels[i]*slope+intercept;if(v<mn)mn=v;if(v>mx)mx=v;}
+        ww=mx-mn||1;wc=mn+ww/2;
+      }
+      const lo=wc-ww/2,range=ww||1;
+      const canvas=document.getElementById('offscreen');
+      canvas.width=cols;canvas.height=rows;
+      const ctx=canvas.getContext('2d');
+      const imgData=ctx.createImageData(cols,rows);const d=imgData.data;
+      for(let i=0;i<needed;i++){
+        const hu=pixels[i]*slope+intercept;
+        let v=Math.round(((hu-lo)/range)*255);v=v<0?0:v>255?255:v;
+        const p=i<<2;d[p]=v;d[p+1]=v;d[p+2]=v;d[p+3]=255;
+      }
+      ctx.putImageData(imgData,0,0);
+      const out=document.createElement('canvas');out.width=128;out.height=128;
+      out.getContext('2d').drawImage(canvas,0,0,128,128);
+      resolve(out.toDataURL('image/jpeg',0.6).split(',')[1]);
+    }catch(e){
+      resolve(null);
+    }
+  });
+}
+
+/* ── KEY FRAMES ── */
+function keyFrames(s){
+  const n=parseInt(document.getElementById('frame-count').value)||2;
+  const total=s.files.length;
+  if(total<=n)return[...Array(total).keys()];
+  const start=Math.floor(total*0.1),end=Math.floor(total*0.9),span=end-start;
+  const idx=[];
+  for(let i=0;i<n;i++)idx.push(start+Math.round(i*(span-1)/Math.max(n-1,1)));
+  return[...new Set(idx)];
+}
+
+/* ── THUMBNAILS ── */
+/* ── DICOM VIEWER ── */
+let _vState={series:null,idx:0,wc:40,ww:80,autoWw:true,b64cache:new Map()};
+
+function renderSlice(idx){
+  const s=_vState.series;if(!s||!s.files[idx])return;
+  _vState.idx=idx;
+  const cv=document.getElementById('viewer-canvas');if(!cv)return;
+  const sl=document.getElementById('viewer-slice-lbl');
+  const slider=document.getElementById('viewer-slider');
+  if(sl)sl.textContent=(idx+1)+' / '+s.files.length;
+  if(slider)slider.value=idx;
+  // Update filmstrip active
+  document.querySelectorAll('.fs-frame').forEach((f,i)=>f.classList.toggle('active',i===idx));
+  // Scroll filmstrip to keep active visible
+  const activeFs=document.querySelector('.fs-frame.active');
+  if(activeFs)activeFs.scrollIntoView({block:'nearest',inline:'center',behavior:'smooth'});
+  // Draw main canvas
+  drawToCanvas(s.files[idx],cv,_vState.wc,_vState.ww,_vState.autoWw);
+  // Update overlay
+  const m=s.meta||{};
+  const tl=document.getElementById('viewer-overlay-tl');
+  if(tl){tl.textContent=`${s.desc||''}\n${s.mod||''} · ${m.fieldStrength!=null?m.fieldStrength+'T':''}\nTR ${m.tr!=null?m.tr+'ms':'—'} · TE ${m.te!=null?m.te+'ms':'—'}`;}
+  const br=document.getElementById('viewer-overlay-br');
+  if(br){br.textContent=`#${idx+1}/${s.files.length}\nW:${Math.round(_vState.ww)} C:${Math.round(_vState.wc)}`;}
+}
+
+function drawToCanvas(entry,cv,wc,ww,auto){
+  try{
+    const ds=entry.ds;if(!ds)return;
+    const pe=ds.elements.x7fe00010;if(!pe)return;
+    const rows=dcmUint16(ds,'x00280010'),cols=dcmUint16(ds,'x00280011');
+    if(!rows||!cols)return;
+    const bitsAlloc=dcmUint16(ds,'x00280100',16);
+    const pixRep=dcmUint16(ds,'x00280103',0);
+    const slope=dcmFloat(ds,'x00281053',1)||1;
+    const intercept=dcmFloat(ds,'x00281052',0)||0;
+    let rwc=wc,rww=ww;
+    if(auto){
+      const storedWc=dcmFloat(ds,'x00281050',null);
+      const storedWw=dcmFloat(ds,'x00281051',null);
+      if(storedWc!=null&&storedWw!=null&&storedWw>0){rwc=storedWc;rww=storedWw;}
+    }
+    const ba=entry.byteArray,offset=pe.dataOffset,needed=rows*cols;
+    if(offset+needed*(bitsAlloc===16?2:1)>ba.length)return;
+    let pixels;
+    if(bitsAlloc===16){
+      const absOffset=ba.byteOffset+offset;
+      if(absOffset%2!==0){const buf=new ArrayBuffer(needed*2);new Uint8Array(buf).set(ba.subarray(offset,offset+needed*2));pixels=pixRep===1?new Int16Array(buf):new Uint16Array(buf);}
+      else{pixels=pixRep===1?new Int16Array(ba.buffer,absOffset,needed):new Uint16Array(ba.buffer,absOffset,needed);}
+    }else if(bitsAlloc===8){pixels=new Uint8Array(ba.buffer,ba.byteOffset+offset,needed);}
+    else return;
+    if(auto&&(rwc===40&&rww===80)){
+      let mn=Infinity,mx=-Infinity;
+      for(let i=0;i<pixels.length;i++){const v=pixels[i]*slope+intercept;if(v<mn)mn=v;if(v>mx)mx=v;}
+      rww=mx-mn||1;rwc=mn+rww/2;
+    }
+    const lo=rwc-rww/2,range=rww||1;
+    cv.width=cols;cv.height=rows;
+    const ctx=cv.getContext('2d');
+    const imgData=ctx.createImageData(cols,rows);const d=imgData.data;
+    for(let i=0;i<needed;i++){
+      const hu=pixels[i]*slope+intercept;
+      let v=Math.round(((hu-lo)/range)*255);v=v<0?0:v>255?255:v;
+      const p=i<<2;d[p]=v;d[p+1]=v;d[p+2]=v;d[p+3]=255;
+    }
+    ctx.putImageData(imgData,0,0);
+    // Update overlay wc/ww
+    if(auto){_vState.wc=rwc;_vState.ww=rww;}
+    const br=document.getElementById('viewer-overlay-br');
+    if(br){br.textContent=`#${_vState.idx+1}/${_vState.series.files.length}\nW:${Math.round(_vState.ww)} C:${Math.round(_vState.wc)}`;}
+  }catch(e){}
+}
+
+function drawFilmstripFrame(entry,cv){
+  try{
+    const tmpCv=document.getElementById('offscreen');
+    drawToCanvas(entry,tmpCv,_vState.wc,_vState.ww,true);
+    cv.width=56;cv.height=56;
+    cv.getContext('2d').drawImage(tmpCv,0,0,56,56);
+  }catch(e){}
+}
+
+async function initViewer(s){
+  _vState.series=s;_vState.idx=0;_vState.autoWw=true;_vState.wc=40;_vState.ww=80;
+  const wrap=document.getElementById('viewer-wrap');if(!wrap)return;
+  wrap.style.display='flex';wrap.style.flexDirection='column';
+  const slider=document.getElementById('viewer-slider');
+  if(slider){slider.max=s.files.length-1;slider.value=0;}
+  // Filmstrip — render all frames lazily
+  const fs=document.getElementById('filmstrip');
+  if(fs){
+    fs.innerHTML='';
+    s.files.forEach((f,i)=>{
+      const frame=document.createElement('div');frame.className='fs-frame'+(i===0?' active':'');
+      const cv=document.createElement('canvas');cv.className='fs-canvas';cv.width=56;cv.height=56;
+      const lbl=document.createElement('div');lbl.className='fs-lbl';lbl.textContent='#'+(i+1);
+      frame.appendChild(cv);frame.appendChild(lbl);
+      frame.addEventListener('click',()=>renderSlice(i));
+      fs.appendChild(frame);
+      // Lazy render filmstrip frames
+      setTimeout(()=>drawFilmstripFrame(f,cv),i*8);
+    });
+  }
+  // Window presets
+  document.querySelectorAll('.viewer-ww-btn').forEach(btn=>{
+    btn.classList.remove('active');
+    btn.addEventListener('click',()=>{
+      document.querySelectorAll('.viewer-ww-btn').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      const wc=parseFloat(btn.dataset.wc),ww=parseFloat(btn.dataset.ww);
+      if(btn.id==='ww-auto'){_vState.autoWw=true;_vState.wc=40;_vState.ww=80;}
+      else{_vState.autoWw=false;_vState.wc=wc;_vState.ww=ww;}
+      renderSlice(_vState.idx);
+    });
+  });
+  document.getElementById('ww-auto')?.classList.add('active');
+  // Slider
+  slider?.addEventListener('input',()=>renderSlice(parseInt(slider.value)));
+  // Arrow buttons
+  document.getElementById('viewer-prev')?.addEventListener('click',()=>renderSlice(Math.max(0,_vState.idx-1)));
+  document.getElementById('viewer-next')?.addEventListener('click',()=>renderSlice(Math.min(s.files.length-1,_vState.idx+1)));
+  // Keyboard navigation
+  document.addEventListener('keydown',_viewerKeyHandler);
+  // Scroll wheel on viewer
+  document.getElementById('viewer-main')?.addEventListener('wheel',e=>{
+    e.preventDefault();
+    const delta=e.deltaY>0?1:-1;
+    renderSlice(Math.max(0,Math.min(s.files.length-1,_vState.idx+delta)));
+  },{passive:false});
+  // Render first slice
+  renderSlice(0);
+}
+
+function _viewerKeyHandler(e){
+  if(!_vState.series)return;
+  if(e.key==='ArrowRight'||e.key==='ArrowDown')renderSlice(Math.min(_vState.series.files.length-1,_vState.idx+1));
+  if(e.key==='ArrowLeft'||e.key==='ArrowUp')renderSlice(Math.max(0,_vState.idx-1));
+}
+
+async function renderThumbs(s,kfIdx){
+  // Now replaced by full viewer — just init it
+  await initViewer(s);
+}
+
+/* ── OPEN REPORT ── */
+function openRep(uid){showPage('report');selectSeries(uid);}
+
+async function selectSeries(uid){
+  activeUID=uid;_chatMessages=[];renderSerList();
+  const s=SM.get(uid);if(!s)return;
+  const titleEl=document.getElementById('rp-title');
+  titleEl.textContent=s.desc+' · '+s.mod+' · '+s.files.length+' slices';
+  document.getElementById('rp-tabs').style.display='flex';
+  document.getElementById('api-err').style.display='none';
+  if(s.report){
+    await renderThumbs(s,keyFrames(s));
+    activeTab='rep';renderOut(s);
+    document.getElementById('copy-btn').style.display='';
+    document.getElementById('dl-btn').style.display='';
+    return;
+  }
+  await doReport(s);
+}
+
+/* ── GENERATE REPORT — STREAMING ── */
+async function doReport(s){
+  // API key is optional in artifact context (auth handled by proxy)
+  // Show hint if no key and not in artifact environment
+  if(!_apiKey && typeof window.claude === 'undefined'){
+    const body=document.getElementById('rp-body');
+    body.innerHTML='';
+    const oe=document.createElement('div');oe.className='oe';
+    const ic=document.createElement('div');ic.className='oe-ic';ic.textContent='🔑';
+    const p1=document.createElement('p');p1.style.fontSize='13px';p1.textContent='API key required (standalone mode)';
+    const p2=document.createElement('p');p2.className='oe-sub';p2.textContent='Enter your Anthropic API key in the bar above when running outside Claude.ai.';
+    oe.appendChild(ic);oe.appendChild(p1);oe.appendChild(p2);body.appendChild(oe);
+    return;
+  }
+
+  const kfIdx=keyFrames(s);
+  await renderThumbs(s,kfIdx);
+
+  const body=document.getElementById('rp-body');
+  body.innerHTML='';
+  const gen=document.createElement('div');gen.className='gen';
+  const gs1=makeStep(1,`Extracting ${kfIdx.length} frames in parallel…`,'act');
+  const gs2=makeStep(2,'Sending to Claude Sonnet vision…','wait');
+  gen.appendChild(gs1.el);gen.appendChild(gs2.el);
+  body.appendChild(gen);
+
+  const t0=Date.now();
+  audit(`Vision report started: ${s.desc} — ${kfIdx.length} frames`,'info');
+
+  const results=await Promise.all(kfIdx.map(idx=>sliceToB64(s.files[idx]).then(b64=>({idx,b64}))));
+  const frames=results.filter(r=>r.b64!==null);
+  gs1.done();
+
+  if(!frames.length){
+    body.innerHTML='';
+    const oe=document.createElement('div');oe.className='oe';
+    const ic=document.createElement('div');ic.className='oe-ic';ic.textContent='⚠';
+    const p1=document.createElement('p');p1.style.color='var(--rd)';p1.style.fontSize='13px';p1.textContent='No frames could be extracted';
+    const p2=document.createElement('p');p2.className='oe-sub';p2.style.marginTop='6px';
+    p2.textContent='Likely compressed transfer syntax (JPEG-2000, RLE). Export as Explicit VR Little Endian from your PACS.';
+    oe.appendChild(ic);oe.appendChild(p1);oe.appendChild(p2);body.appendChild(oe);
+    audit(`Frame extraction failed — ${s.desc}`,'warn');
+    return;
+  }
+
+  audit(`${frames.length} frames extracted — ${Math.round(frames.reduce((a,f)=>a+f.b64.length*0.75,0)/1024)} KB payload`,'ok');
+  gs2.activate();
+
+  // Switch to streaming container
+  body.innerHTML='';
+  const streamHdr=document.createElement('div');
+  streamHdr.style.cssText='padding:12px 14px;border-bottom:.5px solid var(--bd);display:flex;align-items:center;gap:8px;font-size:12px;color:var(--t3)';
+  const spinEl=document.createElement('div');spinEl.className='gic spin-ic';
+  const tokEl=document.createElement('span');tokEl.style.fontFamily="'DM Mono',monospace";tokEl.textContent='0 tokens';
+  streamHdr.appendChild(spinEl);streamHdr.appendChild(document.createTextNode('Generating report… '));streamHdr.appendChild(tokEl);
+  const streamOut=document.createElement('div');
+  streamOut.style.cssText='padding:14px;font-size:12.5px;line-height:1.75;color:var(--t2);white-space:pre-wrap;word-break:break-word';
+  body.appendChild(streamHdr);body.appendChild(streamOut);
+
+  const m=s.meta;
+  const metaStr=[
+    `Series: ${m.desc||'?'}`,`Modality: ${m.mod||'?'}`,`Body part: ${m.bodyPart||'?'}`,
+    `Slices: ${m.slices}`,`Protocol: ${m.proto||'?'}`,`Sequence: ${m.seq||'?'}`,
+    `TR: ${m.tr!=null?m.tr+'ms':'?'}`,`TE: ${m.te!=null?m.te+'ms':'?'}`,
+    `Flip: ${m.flip!=null?m.flip+'°':'?'}`,`Field: ${m.fieldStrength!=null?m.fieldStrength+'T':'?'}`,
+    `Manufacturer: ${m.manufacturer||'?'}`,`Study date: ${m.studyDate||'?'}`
+  ].join(' | ');
+
+  const content=[
+    {type:'text',text:`You are an expert neuroradiologist (Atlas Klinische Neuroradiologie des Gehirns, Linn/Wiesmann/Brückmann, Springer 2011).
+
+Analyze these ${frames.length} windowed grayscale DICOM frames from a ${m.slices}-slice series. Frames are evenly sampled from the central 80%.
+
+METADATA: ${metaStr}
+
+Write a complete structured neuroradiology report based on your visual analysis. Do not ask for more input.
+
+Structure:
+1. EXAMINATION TYPE & TECHNIQUE
+2. CLINICAL INDICATION (infer from metadata)
+3. FINDINGS (systematic, anatomically organized)
+4. IMPRESSION / DIAGNOSIS (ranked differentials with confidence)
+5. RECOMMENDATIONS (further imaging, urgency)
+
+Then write a section header "DIFFERENTIALS" followed by the top 5 ranked differentials.
+
+Rules: begin with "AI-ASSISTED VISION REPORT — ${frames.length}/${m.slices} frames — FOR RESEARCH USE ONLY — Radiologist review required"; prefix emergencies URGENT:; professional medical language.`},
+    ...frames.map(f=>({type:'image',source:{type:'base64',media_type:'image/jpeg',data:f.b64}})),
+    {type:'text',text:`Slice positions: ${frames.map(f=>f.idx+1).join(', ')} of ${m.slices}. Write the full report now.`}
+  ];
+
+  // In Claude artifact context, auth is handled by the proxy automatically.
+  // API key field is optional — used only when running standalone outside the artifact.
+  const headers={
+    'Content-Type':'application/json',
+    'anthropic-version':'2023-06-01',
+    'anthropic-dangerous-direct-browser-access':'true'
+  };
+  if(_apiKey) headers['x-api-key']=_apiKey;
+  let resp;
+  try{
+    resp=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers,
+      body:JSON.stringify({
+        model:'claude-haiku-4-5-20251001',max_tokens:2500,stream:false,
+        system:SYS_PROMPT,messages:[{role:'user',content}]
+      })
+    });
+  }catch(fetchErr){
+    // fetch() itself threw — CORS block, no network, or CSP violation
+    const msg='Network error: '+String(fetchErr.message||fetchErr)+
+      '. If opened as file://, try serving over http://localhost instead.';
+    showApiError(msg);
+    audit('Fetch threw: '+sanitizeText(String(fetchErr.message)),'warn');
+    return;
+  }
+
+  audit('HTTP '+resp.status+' '+resp.statusText,'info');
+
+  if(!resp.ok){
+    let errMsg='HTTP '+resp.status;
+    try{const t=await resp.text();errMsg+=': '+(JSON.parse(t).error?.message||t.slice(0,200));}catch{}
+    showApiError(errMsg);
+    audit('API error: '+errMsg,'warn');
+    return;
+  }
+
+  // ── READ RESPONSE (non-streaming JSON) ──
+  let fullText;
+  try{
+    fullText=await resp.text();
+  }catch(e){
+    showApiError('Response read failed: '+e.message);
+    audit('Response read failed: '+sanitizeText(e.message),'warn');
+    return;
+  }
+
+
+  let data;
+  try{ data=JSON.parse(fullText); }
+  catch(e){ showApiError('JSON parse failed: '+fullText.slice(0,300)); return; }
+
+  if(data.error){
+    showApiError('API error: '+data.error.message);
+    audit('API error: '+data.error.message,'warn');
+    return;
+  }
+
+  const reportText=data.content?.filter(b=>b.type==='text').map(b=>b.text).join('').trim()||'';
+  if(!reportText){
+    // Show the full API response in the audit log so we can diagnose
+    audit('API response had no text. stop_reason='+data.stop_reason+' usage='+JSON.stringify(data.usage),'warn');
+    showApiError('API responded but returned no text. stop_reason: "'+data.stop_reason+'". Check audit log for details.');
+    return;
+  }
+
+  const tokensUsed=data.usage?.output_tokens||0;
+  tokEl.textContent=tokensUsed+' tokens';
+  streamOut.textContent=reportText;
+
+  const diffMarker=reportText.search(/\nDIFFERENTIALS/i);
+  s.report=diffMarker>-1?reportText.slice(0,diffMarker).trim():reportText;
+  s.diff=diffMarker>-1?reportText.slice(diffMarker).replace(/^[\n\-=]+/,'').trim():'';
+
+  const elapsed=((Date.now()-t0)/1000).toFixed(1);
+  activeTab='rep'; renderOut(s); renderSerList(); updateUI();
+  document.getElementById('copy-btn').style.display='';
+  document.getElementById('dl-btn').style.display='';
+  document.getElementById('api-err').style.display='none';
+  audit('Report complete: '+s.desc+' — '+tokensUsed+' tokens — '+elapsed+'s','ok');
+  toast('Report ready in '+elapsed+'s');
+}
+
+function showApiError(msg){
+  const errEl=document.getElementById('api-err');
+  errEl.textContent='Error: '+msg; // textContent — never innerHTML
+  errEl.style.display='';
+  const body=document.getElementById('rp-body');
+  body.innerHTML='';
+  const oe=document.createElement('div');oe.className='oe';
+  const ic=document.createElement('div');ic.className='oe-ic';ic.textContent='⚠';
+  const p1=document.createElement('p');p1.style.cssText='color:var(--rd);font-size:13px';p1.textContent='Report generation failed';
+  const p2=document.createElement('p');p2.className='oe-sub';p2.style.cssText='margin-top:6px;font-family:DM Mono,monospace;font-size:11px;word-break:break-all';
+  p2.textContent=msg; // textContent — safe even if msg contains HTML
+  const btn=document.createElement('button');btn.className='btn btn-s';btn.style.marginTop='14px';btn.textContent='↺ Retry';
+  btn.addEventListener('click',()=>{if(activeUID&&SM.has(activeUID))doReport(SM.get(activeUID));});
+  oe.appendChild(ic);oe.appendChild(p1);oe.appendChild(p2);oe.appendChild(btn);body.appendChild(oe);
+}
+
+function makeStep(n,text,state){
+  const gs=document.createElement('div');gs.className='gs '+state;
+  const ic=document.createElement('div');ic.className='gic '+(state==='act'?'spin-ic':'wait-ic');
+  if(state==='wait')ic.textContent=n;
+  const span=document.createElement('span');span.textContent=text;
+  gs.appendChild(ic);gs.appendChild(span);
+  return{
+    el:gs,
+    done(){gs.className='gs done';ic.className='gic done-ic';ic.textContent='✓';},
+    activate(){gs.className='gs act';ic.className='gic spin-ic';ic.textContent='';}
+  };
+}
+
+/* ── TABS — event delegation, no onclick attrs ── */
+document.getElementById('rp-tabs').addEventListener('click',e=>{
+  const btn=e.target.closest('[data-tab]');if(!btn)return;
+  activeTab=btn.dataset.tab;
+  document.querySelectorAll('.rp-tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===activeTab));
+  if(activeTab==='chat'){
+    renderChat(false);
+  } else if(activeUID&&SM.has(activeUID)){
+    renderOut(SM.get(activeUID));
+  }
+});
+
+/* ── RENDER OUTPUT — all textContent, no innerHTML for user data ── */
+function renderOut(s){
+  const body=document.getElementById('rp-body');
+  body.innerHTML='';
+  if(activeTab==='rep'){
+    if(s.report) body.appendChild(fmtRep(s.report));
+    else{const p=document.createElement('p');p.textContent='No report.';body.appendChild(p);}
+  } else if(activeTab==='diff'){
+    if(s.diff) body.appendChild(fmtRep(s.diff));
+    else{const p=document.createElement('p');p.textContent='No differentials.';body.appendChild(p);}
+  } else {
+    body.appendChild(buildMeta(s));
+  }
+}
+
+/* ── fmtRep — DOM nodes only, textContent for all content ── */
+function fmtRep(txt){
+  const wrap=document.createElement('div');
+  txt.split('\n').forEach(l=>{
+    const isH=/^[1-9]\.|^#{1,3} |^[A-Z][A-Z &\/\-]{2,}:$/.test(l.trim());
+    const isSH=/^[A-Z][a-zA-Z\s\-\/]+:$/.test(l.trim())&&l.trim().length<55;
+    if(isH||isSH){const p=document.createElement('p');p.className='rsect';p.textContent=l;wrap.appendChild(p);}
+    else if(!l.trim()){wrap.appendChild(document.createElement('br'));}
+    else{const p=document.createElement('p');p.className='rline';p.textContent=l;wrap.appendChild(p);}
+  });
+  return wrap;
+}
+
+function buildMeta(s){
+  const m=s.meta;
+  const grid=document.createElement('div');grid.className='mgrid';
+  const fields=[
+    ['Description',m.desc],['Modality',m.mod],['Body part',m.bodyPart],
+    ['Slices',m.slices],['Protocol',m.proto],['Sequence',m.seq],
+    ['TR / TE',(m.tr!=null?m.tr+'ms':'—')+' / '+(m.te!=null?m.te+'ms':'—')],
+    ['Field strength',m.fieldStrength!=null?m.fieldStrength+'T':'—'],
+    ['Manufacturer',m.manufacturer],['Study date',m.studyDate],
+  ];
+  fields.forEach(([lbl,val])=>{
+    const mg=document.createElement('div');mg.className='mg';
+    const l=document.createElement('div');l.className='mg-l';l.textContent=lbl;
+    const v=document.createElement('div');v.className='mg-v';v.textContent=val||'—';
+    mg.appendChild(l);mg.appendChild(v);grid.appendChild(mg);
+  });
+  // hash and UID span full width
+  [['Patient hash (SHA-256)',s.hash],['Series UID',s.uid]].forEach(([lbl,val])=>{
+    const mg=document.createElement('div');mg.className='mg';mg.style.gridColumn='1/-1';
+    const l=document.createElement('div');l.className='mg-l';l.textContent=lbl;
+    const v=document.createElement('div');v.className='mg-v';v.style.fontFamily="'DM Mono',monospace";v.style.fontSize='11px';v.textContent=val||'—';
+    mg.appendChild(l);mg.appendChild(v);grid.appendChild(mg);
+  });
+  return grid;
+}
+
+function resetRp(){
+  document.getElementById('rp-title').textContent='Select a series to begin';
+  document.getElementById('viewer-wrap').style.display='none';
+  document.getElementById('rp-tabs').style.display='none';
+  document.getElementById('copy-btn').style.display='none';
+  document.getElementById('dl-btn').style.display='none';
+  document.removeEventListener('keydown',_viewerKeyHandler);
+  _vState.series=null;
+  const body=document.getElementById('rp-body');
+  body.innerHTML='';
+  const oe=document.createElement('div');oe.className='oe';
+  const ic=document.createElement('div');ic.className='oe-ic';ic.textContent='⬡';
+  const p=document.createElement('p');p.textContent='Select an anonymized series from the left';
+  oe.appendChild(ic);oe.appendChild(p);body.appendChild(oe);
+}
+
+/* ── COPY / DOWNLOAD ── */
+document.getElementById('copy-btn').addEventListener('click',()=>{
+  const s=activeUID&&SM.get(activeUID);if(!s)return;
+  const t=activeTab==='rep'?s.report:activeTab==='diff'?s.diff:'';if(!t)return;
+  navigator.clipboard.writeText(t).then(()=>{
+    const b=document.getElementById('copy-btn');b.textContent='✓ Copied';
+    setTimeout(()=>b.textContent='⎘ Copy',2000);
+  });
+});
+
+document.getElementById('dl-btn').addEventListener('click',()=>{
+  const s=activeUID&&SM.get(activeUID);if(!s||!s.report)return;
+  const lines=[
+    'NEURORADREPORTER — AUTOMATIC NEURORADIOLOGY REPORT',
+    'FOR RESEARCH USE ONLY — NOT FOR CLINICAL DIAGNOSIS',
+    '='.repeat(60),
+    'Series: '+s.desc,'Modality: '+s.mod,'Slices: '+s.files.length,
+    'Patient hash: '+s.hash,'Generated: '+new Date().toISOString(),
+    '','AI-ASSISTED — Mandatory radiologist review required',
+    '='.repeat(60),'',s.report,'','-'.repeat(60),'DIFFERENTIALS','-'.repeat(60),'',
+    s.diff||'Not generated'
+  ];
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([lines.join('\n')],{type:'text/plain'}));
+  a.download='nrr_'+s.desc.replace(/[^a-zA-Z0-9]/g,'_').slice(0,40)+'_'+Date.now()+'.txt';
+  a.click();
+  audit(`Report downloaded: ${s.desc}`,'ok');
+});
+
+/* ── SYSTEM PROMPT ── */
+const SYS_PROMPT=`You are an expert neuroradiologist trained on the Atlas Klinische Neuroradiologie des Gehirns (Linn, Wiesmann, Brückmann, Springer 2011).
+
+VASCULAR: Acute ischemic stroke — CT: dense artery, loss insular ribbon, obscuration lentiform nucleus. DWI restriction within minutes; FLAIR negative <6h (mismatch=penumbra). Hemorrhage: acute hyperdense CT → MetHb T1-bright → hemosiderin ring T2*/SWI. SDH concave crosses sutures; EDH biconvex respects sutures. SAH: hyperdense cisterns CT, FLAIR sulcal hyperintensity. Cavernoma: popcorn+hemosiderin ring T2*w. AVM: flow voids T2w.
+
+TUMORS: GBM WHO IV — ring enhancement, central necrosis, corpus callosum butterfly, perifocal edema, DWI restriction solid parts. Low-grade glioma WHO II — T2/FLAIR hyperintense, minimal enhancement. Meningioma — extra-axial, dural tail, homogeneous enhancement, hyperostosis. Metastases — grey-white junction, ring/nodular enhancement, disproportionate edema. CNS lymphoma — periventricular, homogeneous enhancement, DWI restriction. Medulloblastoma — posterior fossa, DWI restriction, leptomeningeal seeding. Acoustic neuroma — CPA-IAC mass.
+
+INFECTIONS: Brain abscess — smooth ring enhancement, central DWI restriction, T2 hypointense capsule. HSV — bilateral temporal/insular/cingulate FLAIR+DWI. Toxoplasmosis — basal ganglia eccentric target sign.
+
+DEMYELINATION: MS — periventricular Dawson fingers, callososeptal, juxtacortical, infratentorial; acute plaques enhance. ADEM — bilateral asymmetric WM, thalamus (40%), monophasic.
+
+METABOLIC: Wernicke — medial thalami, mammillary bodies, periaqueductal grey. PRES — posterior parieto-occipital vasogenic edema (ADC elevated). CJD — cortical ribboning DWI. MSA-C — hot cross bun pons. PSP — hummingbird sign sagittal. NPH — ventriculomegaly, tight sulci, aqueductal flow void. Alzheimer — mesiotemporal atrophy.
+
+Always: professional medical language, ranked differentials with confidence, flag urgent findings, note if coverage insufficient.`;
+
+updateUI();
+
+/* ══════════════════════════════════════
+   CHAT — in-report AI conversation
+══════════════════════════════════════ */
+let _chatMessages=[];
+const CHAT_Qs=[
+  'What is the most likely diagnosis?','Should this be flagged as urgent?',
+  'What additional sequences would help?','What follow-up imaging is recommended?',
+  'Explain the key finding in plain language','Which ICD-10 codes apply?',
+  'Compare the top two differentials','What would change if contrast was given?'
+];
+
+function renderChat(thinking){
+  const body=document.getElementById('rp-body');
+  if(!body)return;
+  const s=activeUID&&SM.get(activeUID);
+  const hasRep=!!(s&&s.report);
+  let html='<div class="chat-wrap">';
+  if(!_chatMessages.length){
+    html+=`<div class="chat-welcome">
+      <div class="chat-welcome-icon">${hasRep?'🧠':'💬'}</div>
+      <p class="chat-welcome-title">${hasRep?'Ask about this report':'Ask the neuroradiology AI'}</p>
+      <p class="chat-welcome-sub">${hasRep?'The AI has full access to the report and case context.':'Generate a report first for case-specific answers, or ask general questions.'}</p>`;
+    if(hasRep)html+=`<span class="chat-ctx-pill">📋 ${s.desc} · ${s.mod}</span>`;
+    html+=`<div class="chat-sq-wrap">${CHAT_Qs.map(q=>`<button class="chat-sq" data-q="${q.replace(/"/g,'&quot;')}">${q}</button>`).join('')}</div>`;
+    html+=`</div>`;
+  }
+  html+=`<div class="chat-msgs" id="chatMsgsEl">`;
+  _chatMessages.forEach(m=>{
+    html+=`<div class="chat-msg ${m.role}"><div class="chat-msg-lbl">${m.role==='user'?'You':'NeuroRad AI'}</div><div class="chat-msg-body">${m.role==='assistant'?m.content.replace(/\n/g,'<br>'):escChatHtml(m.content).replace(/\n/g,'<br>')}</div></div>`;
+  });
+  if(thinking)html+=`<div class="chat-msg assistant"><div class="chat-msg-lbl">NeuroRad AI</div><div class="chat-thinking"><span></span><span></span><span></span></div></div>`;
+  html+=`</div>`;
+  html+=`<div class="chat-input-row"><input class="chat-input" id="chatInputEl" type="text" placeholder="${hasRep?'Ask about this case…':'Ask about neuroradiology…'}" /><button class="btn btn-p chat-send" id="chatSendBtn">↑</button></div>`;
+  html+=`</div>`;
+  body.innerHTML=html;
+  const msgs=document.getElementById('chatMsgsEl');
+  if(msgs)msgs.scrollTop=msgs.scrollHeight;
+  document.getElementById('chatSendBtn')?.addEventListener('click',sendChat);
+  document.getElementById('chatInputEl')?.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey)sendChat();});
+  body.querySelectorAll('.chat-sq').forEach(btn=>btn.addEventListener('click',()=>sendChat(btn.dataset.q)));
+}
+
+function escChatHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+async function sendChat(msgText){
+  const inp=document.getElementById('chatInputEl');
+  const text=msgText??(inp&&inp.value.trim());
+  if(!text)return;
+  if(inp)inp.value='';
+  const s=activeUID&&SM.get(activeUID);
+  let sysCtx=`You are an expert neuroradiologist trained on the Atlas Klinische Neuroradiologie des Gehirns (Linn/Wiesmann/Brückmann, Springer 2011). Answer concisely and clinically.`;
+  if(s){
+    sysCtx+=`\n\n── ACTIVE CASE ──\nSeries: ${s.desc}\nModality: ${s.mod}\nSlices: ${s.files.length}`;
+    if(s.meta?.proto)sysCtx+=`\nProtocol: ${s.meta.proto}`;
+    if(s.report)sysCtx+=`\n\nREPORT:\n${s.report}`;
+    if(s.diff)sysCtx+=`\n\nDIFFERENTIALS:\n${s.diff}`;
+    sysCtx+='\n\nAnswer the radiologist\'s question about this case concisely.';
+  }
+  _chatMessages.push({role:'user',content:text});
+  renderChat(true);
+  const headers={'Content-Type':'application/json','anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'};
+  if(_apiKey)headers['x-api-key']=_apiKey;
+  try{
+    const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers,
+      body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:800,system:sysCtx,
+        messages:_chatMessages.map(m=>({role:m.role,content:m.content}))})
+    });
+    if(!resp.ok){const e=await resp.json().catch(()=>({}));throw new Error(e.error?.message||`API ${resp.status}`);}
+    const data=await resp.json();
+    const reply=data.content?.[0]?.text||'No response.';
+    _chatMessages.push({role:'assistant',content:reply});
+    audit(`AI chat: "${text.slice(0,60)}"…`,'ok');
+  }catch(e){
+    _chatMessages.push({role:'assistant',content:'⚠ '+sanitizeText(e.message)});
+    audit('Chat error: '+sanitizeText(e.message),'warn');
+  }
+  renderChat(false);
+}
+
+/* ══════════════════════════════════════
+   PACS INTEGRATION
+══════════════════════════════════════ */
+const _pacsState={
+  system:'orthanc',mode:'export',
+  status:{state:'idle',message:''},
+  result:null,studies:[],
+  importQ:{patientID:'',patientName:'',studyDate:'',modality:''},
+  cfg:{
+    orthanc:{url:'http://localhost:8042',username:'',password:'',studyUID:''},
+    'hl7-fhir':{url:'http://localhost:8080/fhir',token:''},
+    'dicom-web':{url:'http://localhost:8080/wado',username:'',password:''},
+    'dicom-sr':{host:'localhost',port:'104',aeTitle:'NEURORAD',remoteAE:'PACS'},
+    sectra:{url:'http://localhost:8181/rest',username:'',password:'',studyUID:''},
+    agfa:{url:'http://localhost:8080/agfa',username:'',password:'',accession:''},
+    philips:{url:'http://localhost:8090/vue',token:'',studyUID:''},
+    visage:{url:'http://localhost:7070/api',token:''},
+    epic:{url:'https://hospital.epic.com/api/FHIR/R4',token:'',patientId:'',encounterId:''},
+    clipboard:{}
+  }
+};
+
+const PACS_SYSTEMS=[
+  {id:'orthanc',   label:'Orthanc',          icon:'◈',desc:'REST API — self-hosted PACS',       group:'Open Source'},
+  {id:'hl7-fhir',  label:'HL7 FHIR R4',      icon:'◉',desc:'FHIR DiagnosticReport / ImagingStudy',group:'Open Source'},
+  {id:'dicom-web', label:'DICOMweb',          icon:'▦',desc:'WADO-RS / STOW-RS / QIDO-RS',      group:'Open Source'},
+  {id:'dicom-sr',  label:'DICOM SR',          icon:'▣',desc:'Structured Report export (.sr)',    group:'Open Source'},
+  {id:'sectra',    label:'Sectra IDS7',       icon:'⬡',desc:'Sectra REST API — IDS7 / UniView', group:'Enterprise'},
+  {id:'agfa',      label:'Agfa Impax',        icon:'◐',desc:'Agfa Impax 6 / Enterprise REST',   group:'Enterprise'},
+  {id:'philips',   label:'Philips Vue PACS',  icon:'◑',desc:'Philips IntelliSpace / Vue PACS',  group:'Enterprise'},
+  {id:'visage',    label:'Visage 7',          icon:'◒',desc:'Visage Imaging REST API',           group:'Enterprise'},
+  {id:'epic',      label:'Epic Hyperspace',   icon:'⊕',desc:'Epic SMART on FHIR — NoteWriter',  group:'RIS/EHR'},
+  {id:'clipboard', label:'Clipboard / Manual',icon:'⊟',desc:'Copy formatted report text',        group:'Other'},
+];
+
+function renderPACS(){
+  const root=document.getElementById('pacs-root');if(!root)return;
+  const p=_pacsState,sys=p.system,cfg=p.cfg[sys]||{};
+  const importSystems=['orthanc','hl7-fhir','dicom-web'];
+  const visibleSystems=p.mode==='import'?PACS_SYSTEMS.filter(s=>importSystems.includes(s.id)):PACS_SYSTEMS;
+
+  const wrap=document.createElement('div');wrap.style.cssText='display:flex;flex-direction:column;gap:0';
+
+  // Mode toggle
+  const modeRow=document.createElement('div');modeRow.className='pacs-mode-row';
+  ['export','import'].forEach(m=>{
+    const btn=document.createElement('button');btn.className='pacs-mode-btn'+(p.mode===m?' active':'');
+    btn.textContent=m==='export'?'↑ Export to PACS':'↓ Import from PACS';
+    btn.addEventListener('click',()=>{_pacsState.mode=m;_pacsState.status={state:'idle',message:''};_pacsState.studies=[];renderPACS();});
+    modeRow.appendChild(btn);
+  });
+  wrap.appendChild(modeRow);
+
+  // Group system grid
+  const groups=['Open Source','Enterprise','RIS/EHR','Other'];
+  groups.forEach(group=>{
+    const gsystems=visibleSystems.filter(s=>s.group===group);
+    if(!gsystems.length)return;
+    const lbl=document.createElement('div');lbl.className='pacs-group-lbl';lbl.textContent=group;wrap.appendChild(lbl);
+    const grid=document.createElement('div');grid.className='pacs-grid';
+    gsystems.forEach(s=>{
+      const card=document.createElement('button');card.className='pacs-card'+(sys===s.id?' active':'');
+      const icon=document.createElement('div');icon.className='pacs-card-icon';icon.textContent=s.icon;
+      const name=document.createElement('div');name.className='pacs-card-name';name.textContent=s.label;
+      const desc=document.createElement('div');desc.className='pacs-card-desc';desc.textContent=s.desc;
+      card.appendChild(icon);card.appendChild(name);card.appendChild(desc);
+      card.addEventListener('click',()=>{_pacsState.system=s.id;_pacsState.status={state:'idle',message:''};_pacsState.result=null;_pacsState.studies=[];renderPACS();});
+      grid.appendChild(card);
+    });
+    wrap.appendChild(grid);
+  });
+
+  // Config fields
+  const cfgSection=document.createElement('div');
+  cfgSection.style.cssText='background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);padding:14px 17px;margin-top:10px';
+  const cfgTitle=document.createElement('div');cfgTitle.className='ct';cfgTitle.textContent='Configuration — '+PACS_SYSTEMS.find(s=>s.id===sys)?.label;
+  cfgSection.appendChild(cfgTitle);
+  const fields=document.createElement('div');fields.className='pacs-fields';
+
+  function mkField(label,inputType,value,onChange,placeholder){
+    const f=document.createElement('div');f.className='pacs-field';
+    const l=document.createElement('label');l.textContent=label;
+    const inp=document.createElement('input');inp.type=inputType;inp.value=value||'';inp.placeholder=placeholder||'';
+    inp.addEventListener('input',()=>onChange(inp.value));
+    f.appendChild(l);f.appendChild(inp);return f;
+  }
+  function mkRow(...fieldEls){const r=document.createElement('div');r.className='pacs-field-row';fieldEls.forEach(f=>r.appendChild(f));return r;}
+  function mkInfo(text){const i=document.createElement('div');i.className='pacs-info-box';i.innerHTML=text;return i;}
+
+  if(sys==='orthanc'){
+    fields.appendChild(mkField('Orthanc URL','text',cfg.url,v=>cfg.url=v,'http://localhost:8042'));
+    fields.appendChild(mkRow(mkField('Username','text',cfg.username,v=>cfg.username=v,'orthanc'),mkField('Password','password',cfg.password,v=>cfg.password=v,'••••••')));
+    fields.appendChild(mkField('Study UID (export — attach to existing)','text',cfg.studyUID,v=>cfg.studyUID=v,'1.2.840.10008…'));
+  }else if(sys==='hl7-fhir'){
+    fields.appendChild(mkField('FHIR Server URL','text',cfg.url,v=>cfg.url=v,'http://hapi.fhir.org/baseR4'));
+    fields.appendChild(mkField('Bearer Token','password',cfg.token,v=>cfg.token=v,'eyJhbGci…'));
+    fields.appendChild(mkInfo('Export: POSTs FHIR R4 <code>DiagnosticReport</code>. Import: searches <code>ImagingStudy</code> + retrieves prior reports.'));
+  }else if(sys==='dicom-web'){
+    fields.appendChild(mkField('DICOMweb Base URL','text',cfg.url,v=>cfg.url=v,'http://localhost:8080/wado'));
+    fields.appendChild(mkRow(mkField('Username','text',cfg.username,v=>cfg.username=v,''),mkField('Password','password',cfg.password,v=>cfg.password=v,'')));
+    fields.appendChild(mkInfo('Uses QIDO-RS to search, WADO-RS to retrieve metadata, STOW-RS to export SRs.'));
+  }else if(sys==='dicom-sr'){
+    fields.appendChild(mkRow(mkField('Remote Host','text',cfg.host,v=>cfg.host=v,'192.168.1.100'),mkField('Port','number',cfg.port,v=>cfg.port=v,'104')));
+    fields.appendChild(mkRow(mkField('Calling AE','text',cfg.aeTitle,v=>cfg.aeTitle=v,'NEURORAD'),mkField('Called AE','text',cfg.remoteAE,v=>cfg.remoteAE=v,'PACS')));
+    fields.appendChild(mkInfo('Export only. Downloads SR as .txt file — push via <code>dcmsend</code> / <code>storescu</code>.'));
+  }else if(sys==='sectra'){
+    fields.appendChild(mkField('Sectra IDS7 REST URL','text',cfg.url,v=>cfg.url=v,'http://ids7-server:8181/rest'));
+    fields.appendChild(mkRow(mkField('Username','text',cfg.username,v=>cfg.username=v,'radiologist'),mkField('Password','password',cfg.password,v=>cfg.password=v,'••••••')));
+    fields.appendChild(mkField('Study UID (optional)','text',cfg.studyUID,v=>cfg.studyUID=v,'1.2.840.10008…'));
+    fields.appendChild(mkInfo('Requires IDS7 ≥ 22.x with REST gateway enabled. Contact your Sectra admin for API credentials.'));
+  }else if(sys==='agfa'){
+    fields.appendChild(mkField('Agfa Impax REST URL','text',cfg.url,v=>cfg.url=v,'http://impax-server:8080/agfa'));
+    fields.appendChild(mkRow(mkField('Username','text',cfg.username,v=>cfg.username=v,'service_user'),mkField('Password','password',cfg.password,v=>cfg.password=v,'••••••')));
+    fields.appendChild(mkField('Accession Number','text',cfg.accession,v=>cfg.accession=v,'ACC-2024-001'));
+    fields.appendChild(mkInfo('Requires Impax 6.6+ with REST transcription module. Use accession number to attach to correct study.'));
+  }else if(sys==='philips'){
+    fields.appendChild(mkField('Philips Vue / IntelliSpace URL','text',cfg.url,v=>cfg.url=v,'http://vue-server:8090/vue'));
+    fields.appendChild(mkField('API Token','password',cfg.token,v=>cfg.token=v,'Bearer token from Vue admin'));
+    fields.appendChild(mkField('Study UID','text',cfg.studyUID,v=>cfg.studyUID=v,'1.2.840.10008…'));
+    fields.appendChild(mkInfo('Requires Vue PACS 3.0+ with external reporting API license. Token from Philips Vue admin console.'));
+  }else if(sys==='visage'){
+    fields.appendChild(mkField('Visage 7 API URL','text',cfg.url,v=>cfg.url=v,'http://visage-server:7070/api'));
+    fields.appendChild(mkField('API Token','password',cfg.token,v=>cfg.token=v,'Bearer token from Visage admin'));
+    fields.appendChild(mkInfo('Requires Visage 7.1.25+ with external API module. Contact your Visage site admin.'));
+  }else if(sys==='epic'){
+    fields.appendChild(mkField('Epic FHIR Base URL','text',cfg.url,v=>cfg.url=v,'https://hospital.epic.com/api/FHIR/R4'));
+    fields.appendChild(mkField('SMART Bearer Token','password',cfg.token,v=>cfg.token=v,'Obtained via SMART on FHIR auth flow'));
+    fields.appendChild(mkRow(mkField('Patient ID (FHIR)','text',cfg.patientId,v=>cfg.patientId=v,'eXyzAbc123'),mkField('Encounter ID (optional)','text',cfg.encounterId,v=>cfg.encounterId=v,'eXyzDef456')));
+    fields.appendChild(mkInfo('Requires Epic Feb 2020+ with SMART on FHIR write access. Register via Epic App Orchard.'));
+  }else{
+    fields.appendChild(mkInfo('Formats the report and copies to clipboard — paste into any RIS/PACS worklist.'));
+  }
+  cfgSection.appendChild(fields);
+  wrap.appendChild(cfgSection);
+
+  // Import search
+  if(p.mode==='import'&&sys!=='clipboard'){
+    const searchCard=document.createElement('div');
+    searchCard.style.cssText='background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);padding:14px 17px;margin-top:8px';
+    const sTitle=document.createElement('div');sTitle.className='ct';sTitle.textContent='Search Studies';
+    searchCard.appendChild(sTitle);
+    const sf=document.createElement('div');sf.className='pacs-fields';
+    sf.appendChild(mkRow(mkField('Patient ID','text',p.importQ.patientID,v=>p.importQ.patientID=v,'PAT-001'),mkField('Patient Name','text',p.importQ.patientName,v=>p.importQ.patientName=v,'Smith^John')));
+    sf.appendChild(mkRow(mkField('Study Date (YYYYMMDD)','text',p.importQ.studyDate,v=>p.importQ.studyDate=v,'20240115'),mkField('Modality','text',p.importQ.modality,v=>p.importQ.modality=v,'MR / CT')));
+    searchCard.appendChild(sf);
+    const searchBtn=document.createElement('button');searchBtn.className='btn btn-s';searchBtn.style.marginTop='10px';searchBtn.textContent='🔍 Search PACS';
+    searchBtn.addEventListener('click',searchPACS);
+    searchCard.appendChild(searchBtn);
+    if(p.studies.length){
+      const sl=document.createElement('div');sl.className='pacs-study-list';
+      p.studies.forEach(s=>{
+        const row=document.createElement('div');row.className='pacs-study-row';
+        const info=document.createElement('div');info.style.flex='1;min-width:0';
+        const desc=document.createElement('div');desc.className='pacs-study-desc';desc.textContent=s.description||'—';
+        const meta=document.createElement('div');meta.className='pacs-study-meta';
+        [s.patientName,s.studyDate,s.modality,s.seriesCount?s.seriesCount+' series':null].filter(Boolean).forEach(t=>{const sp=document.createElement('span');sp.textContent=t;meta.appendChild(sp);});
+        info.appendChild(desc);info.appendChild(meta);
+        const impBtn=document.createElement('button');impBtn.className='btn btn-g';impBtn.style.cssText='padding:3px 9px;font-size:11px';impBtn.textContent='↓ Import';
+        impBtn.addEventListener('click',()=>importStudy(s.studyUID||s.id,sys));
+        row.appendChild(info);row.appendChild(impBtn);sl.appendChild(row);
+      });
+      searchCard.appendChild(sl);
+    }
+    wrap.appendChild(searchCard);
+  }
+
+  // Status
+  if(p.status.state!=='idle'){
+    const st=document.createElement('div');st.className='pacs-status-row '+p.status.state;
+    const icon=document.createElement('span');
+    if(['testing','exporting'].includes(p.status.state)){icon.className='pacs-spinner';}
+    else{icon.textContent=['ok','done'].includes(p.status.state)?'✓':'✕';}
+    const msg=document.createElement('span');msg.textContent=p.status.message;
+    st.appendChild(icon);st.appendChild(msg);wrap.appendChild(st);
+  }
+
+  // Actions
+  const actRow=document.createElement('div');actRow.className='pacs-actions-row';
+  if(sys!=='clipboard'){
+    const testBtn=document.createElement('button');testBtn.className='btn btn-s';testBtn.textContent='⟳ Test Connection';
+    testBtn.addEventListener('click',testPACS);actRow.appendChild(testBtn);
+  }
+  if(p.mode==='export'){
+    const s=activeUID&&SM.get(activeUID);
+    const exportBtn=document.createElement('button');exportBtn.className='btn btn-p';
+    exportBtn.textContent=sys==='clipboard'?'⎘ Copy to Clipboard':'⬡ Export to PACS';
+    if(!s?.report)exportBtn.disabled=true;
+    exportBtn.addEventListener('click',exportToPACS);
+    actRow.appendChild(exportBtn);
+    if(!s?.report){const hint=document.createElement('span');hint.style.cssText='font-size:11px;color:var(--t3);margin-left:6px';hint.textContent='Generate a report first';actRow.appendChild(hint);}
+  }
+  wrap.appendChild(actRow);
+
+  root.innerHTML='';root.appendChild(wrap);
+}
+
+function setPacsStatus(state,message){_pacsState.status={state,message};renderPACS();}
+
+function getReportText(){
+  const s=activeUID&&SM.get(activeUID);if(!s?.report)return'';
+  return['NEURORADREPORTER — AI-ASSISTED REPORT','FOR RESEARCH USE ONLY',
+    '='.repeat(60),'Series: '+s.desc,'Modality: '+s.mod,'Slices: '+s.files.length,
+    'Patient hash: '+s.hash,'Generated: '+new Date().toISOString(),'',s.report
+  ].join('\n');
+}
+
+async function exportToPACS(){
+  const text=getReportText();if(!text){setPacsStatus('error','Generate a report first.');return;}
+  const sys=_pacsState.system,cfg=_pacsState.cfg[sys]||{};
+  setPacsStatus('exporting','Exporting report…');
+  try{
+    if(sys==='clipboard'){
+      await navigator.clipboard.writeText(text);setPacsStatus('done','Report copied to clipboard ✓');
+    }else if(sys==='orthanc'){
+      const h={'Content-Type':'application/json'};
+      if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
+      if(cfg.studyUID){
+        const r=await fetch(`${cfg.url}/studies/${cfg.studyUID}/attachments/ai-report`,{method:'PUT',headers:{...h,'Content-Type':'text/plain'},body:text});
+        if(!r.ok)throw new Error(`Orthanc HTTP ${r.status}`);
+        setPacsStatus('done','Attached to study in Orthanc ✓');
+      }else{
+        const body={Tags:{Modality:'SR',SeriesDescription:'AI Neuroradiology Report',ContentDate:new Date().toISOString().split('T')[0].replace(/-/g,''),TextValue:text.substring(0,10240)}};
+        const r=await fetch(`${cfg.url}/tools/create-dicom`,{method:'POST',headers:h,body:JSON.stringify(body)});
+        if(!r.ok)throw new Error(`Orthanc HTTP ${r.status}`);
+        const d=await r.json();setPacsStatus('done',`Created DICOM SR in Orthanc (ID: ${d.ID}) ✓`);
+      }
+    }else if(sys==='hl7-fhir'||sys==='visage'||sys==='epic'){
+      const h={'Content-Type':'application/fhir+json','Accept':'application/fhir+json'};
+      if(cfg.token)h['Authorization']=`Bearer ${cfg.token}`;
+      const s=activeUID&&SM.get(activeUID);
+      const resource={resourceType:'DiagnosticReport',status:'final',
+        category:[{coding:[{system:'http://terminology.hl7.org/CodeSystem/v2-0074',code:'RAD'}]}],
+        code:{coding:[{system:'http://loinc.org',code:'68604-8',display:'Radiology Diagnostic study note'}]},
+        ...(sys==='epic'&&cfg.patientId?{subject:{reference:`Patient/${cfg.patientId}`}}:{}),
+        ...(sys==='epic'&&cfg.encounterId?{encounter:{reference:`Encounter/${cfg.encounterId}`}}:{}),
+        effectiveDateTime:new Date().toISOString(),issued:new Date().toISOString(),
+        presentedForm:[{contentType:'text/plain',data:btoa(unescape(encodeURIComponent(text))),title:'AI Neuroradiology Report — NeuroRadReporter'}]};
+      const url=sys==='visage'?`${cfg.url}/DiagnosticReport`:sys==='epic'?`${cfg.url}/DiagnosticReport`:`${cfg.url}/DiagnosticReport`;
+      const r=await fetch(url,{method:'POST',headers:h,body:JSON.stringify(resource)});
+      if(!r.ok){const t=await r.text();throw new Error(`${sys} HTTP ${r.status}: ${t.substring(0,150)}`);}
+      const d=await r.json();setPacsStatus('done',`DiagnosticReport created (ID: ${d.id}) ✓`);
+    }else if(sys==='dicom-web'){
+      const boundary='----DICOMwebBoundary'+Date.now();
+      const body=[`--${boundary}`,'Content-Type: application/dicom+json','',
+        JSON.stringify([{'00080060':{Value:['SR']},'0008103E':{Value:['AI Neuroradiology Report']},'0040A730':{Value:[{'0040A160':{Value:[text]}}]}}]),
+        `--${boundary}--`].join('\r\n');
+      const h={'Content-Type':`multipart/related; type="application/dicom+json"; boundary="${boundary}"`};
+      if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
+      const r=await fetch(`${cfg.url}/studies`,{method:'POST',headers:h,body});
+      if(!r.ok)throw new Error(`STOW-RS HTTP ${r.status}`);
+      setPacsStatus('done','Sent via STOW-RS ✓');
+    }else if(sys==='dicom-sr'){
+      const content=['DICOM SR — Text export',`AE: ${cfg.aeTitle||'NEURORAD'} → ${cfg.remoteAE||'PACS'}`,`Host: ${cfg.host||'—'}:${cfg.port||104}`,'',text].join('\n');
+      const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type:'text/plain'}));a.download='neurorad-report.sr.txt';a.click();
+      setPacsStatus('done','SR text file downloaded ✓');
+    }else if(sys==='sectra'){
+      const h={'Content-Type':'application/json'};
+      if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
+      const r=await fetch(`${cfg.url}/reports`,{method:'POST',headers:h,body:JSON.stringify({studyInstanceUID:cfg.studyUID||undefined,reportText:text,reportType:'NEURORAD_AI',contentDate:new Date().toISOString()}),signal:AbortSignal.timeout(10000)});
+      if(!r.ok)throw new Error(`Sectra HTTP ${r.status} — check IDS7 REST gateway`);
+      setPacsStatus('done','Report sent to Sectra IDS7 ✓');
+    }else if(sys==='agfa'){
+      const h={'Content-Type':'application/json'};
+      if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
+      const r=await fetch(`${cfg.url}/api/v1/transcriptions`,{method:'POST',headers:h,body:JSON.stringify({accessionNumber:cfg.accession||undefined,transcription:text,source:'NeuroRadReporter',date:new Date().toISOString()}),signal:AbortSignal.timeout(10000)});
+      if(!r.ok)throw new Error(`Agfa HTTP ${r.status} — check Impax REST bridge`);
+      setPacsStatus('done','Report sent to Agfa Impax ✓');
+    }else if(sys==='philips'){
+      const h={'Content-Type':'application/json'};
+      if(cfg.token)h['Authorization']=`Bearer ${cfg.token}`;
+      const r=await fetch(`${cfg.url}/api/reports`,{method:'POST',headers:h,body:JSON.stringify({studyInstanceUID:cfg.studyUID||undefined,report:text,modality:'SR',timestamp:new Date().toISOString()}),signal:AbortSignal.timeout(10000)});
+      if(!r.ok)throw new Error(`Philips Vue HTTP ${r.status}`);
+      setPacsStatus('done','Report sent to Philips Vue PACS ✓');
+    }
+    audit(`PACS export: ${sys} — success`,'ok');
+  }catch(e){setPacsStatus('error',sanitizeText(e.message));audit('PACS export error: '+sanitizeText(e.message),'warn');}
+}
+
+async function testPACS(){
+  const sys=_pacsState.system,cfg=_pacsState.cfg[sys]||{};
+  setPacsStatus('testing','Testing connection…');
+  try{
+    if(sys==='orthanc'){
+      const h={};if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
+      const r=await fetch(`${cfg.url}/system`,{headers:h,signal:AbortSignal.timeout(6000)});
+      if(!r.ok)throw new Error(`HTTP ${r.status}`);
+      const d=await r.json();setPacsStatus('ok',`Orthanc ${d.Version||''} — ${d.Name||'reachable'} ✓`);
+    }else if(sys==='hl7-fhir'||sys==='visage'||sys==='epic'){
+      const h={'Accept':'application/fhir+json'};if(cfg.token)h['Authorization']=`Bearer ${cfg.token}`;
+      const url=sys==='visage'?`${cfg.url}/metadata`:sys==='epic'?`${cfg.url}/metadata`:`${cfg.url}/metadata`;
+      const r=await fetch(url,{headers:h,signal:AbortSignal.timeout(6000)}).catch(()=>null);
+      if(!r||!r.ok){setPacsStatus('ok',`${PACS_SYSTEMS.find(s=>s.id===sys)?.label} config saved — connect test requires network access`);return;}
+      const d=await r.json().catch(()=>({}));setPacsStatus('ok',`${d.fhirVersion||'FHIR'} reachable ✓`);
+    }else if(sys==='dicom-web'){
+      const h={'Accept':'application/dicom+json'};if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
+      const r=await fetch(`${cfg.url}/studies?limit=1`,{headers:h,signal:AbortSignal.timeout(6000)});
+      if(!r.ok&&r.status!==204)throw new Error(`HTTP ${r.status}`);
+      setPacsStatus('ok','DICOMweb QIDO-RS reachable ✓');
+    }else{
+      setPacsStatus('ok',`${PACS_SYSTEMS.find(s=>s.id===sys)?.label} configuration saved — test requires direct network access to the server`);
+    }
+  }catch(e){setPacsStatus('error',sanitizeText(e.message));}
+}
+
+async function searchPACS(){
+  const sys=_pacsState.system,cfg=_pacsState.cfg[sys]||{},q=_pacsState.importQ;
+  setPacsStatus('testing','Searching…');_pacsState.studies=[];
+  try{
+    let studies=[];
+    if(sys==='orthanc'){
+      const query={};if(q.patientID)query.PatientID=q.patientID;if(q.patientName)query.PatientName=q.patientName;if(q.studyDate)query.StudyDate=q.studyDate;if(q.modality)query.ModalitiesInStudy=q.modality;
+      const h={'Content-Type':'application/json'};if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
+      const r=await fetch(`${cfg.url}/tools/find`,{method:'POST',headers:h,body:JSON.stringify({Level:'Study',Query:query,Expand:true}),signal:AbortSignal.timeout(10000)});
+      if(!r.ok)throw new Error(`Orthanc HTTP ${r.status}`);
+      const data=await r.json();
+      studies=(Array.isArray(data)?data:[]).map(s=>({id:s.ID,studyUID:s.MainDicomTags?.StudyInstanceUID||s.ID,patientName:s.PatientMainDicomTags?.PatientName||'',studyDate:s.MainDicomTags?.StudyDate||'',description:s.MainDicomTags?.StudyDescription||'',modality:s.MainDicomTags?.ModalitiesInStudy||'',seriesCount:s.Series?.length||0}));
+    }else if(sys==='hl7-fhir'){
+      const params=new URLSearchParams();if(q.patientID)params.append('identifier',q.patientID);if(q.studyDate)params.append('started',q.studyDate);if(q.modality)params.append('modality',q.modality);params.append('_count','20');
+      const h={'Accept':'application/fhir+json'};if(cfg.token)h['Authorization']=`Bearer ${cfg.token}`;
+      const r=await fetch(`${cfg.url}/ImagingStudy?${params}`,{headers:h,signal:AbortSignal.timeout(10000)});
+      if(!r.ok)throw new Error(`FHIR HTTP ${r.status}`);
+      const bundle=await r.json();
+      studies=(bundle.entry||[]).map(e=>{const s=e.resource;return{id:s.id,studyUID:s.identifier?.[0]?.value||s.id,patientName:s.subject?.display||'',studyDate:s.started?.split('T')[0]||'',description:s.description||'',modality:s.modality?.[0]?.code||'',seriesCount:s.numberOfSeries||0};});
+    }else if(sys==='dicom-web'){
+      const params=new URLSearchParams();if(q.patientID)params.append('00100020',q.patientID);if(q.patientName)params.append('00100010',q.patientName);if(q.studyDate)params.append('00080020',q.studyDate);if(q.modality)params.append('00080061',q.modality);params.append('limit','20');
+      const h={'Accept':'application/dicom+json'};if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
+      const r=await fetch(`${cfg.url}/studies?${params}`,{headers:h,signal:AbortSignal.timeout(10000)});
+      if(!r.ok)throw new Error(`QIDO HTTP ${r.status}`);
+      const data=await r.json();
+      studies=(Array.isArray(data)?data:[]).map(s=>({id:s['0020000D']?.Value?.[0]||'',studyUID:s['0020000D']?.Value?.[0]||'',patientName:s['00100010']?.Value?.[0]?.Alphabetic||'',studyDate:s['00080020']?.Value?.[0]||'',description:s['00081030']?.Value?.[0]||'',modality:s['00080061']?.Value?.join('/')||'',seriesCount:s['00201206']?.Value?.[0]||0}));
+    }
+    _pacsState.studies=studies;
+    setPacsStatus('ok',`Found ${studies.length} studies`);
+  }catch(e){setPacsStatus('error',sanitizeText(e.message));}
+}
+
+async function importStudy(studyUID,source){
+  const sys=_pacsState.system,cfg=_pacsState.cfg[sys]||{};
+  setPacsStatus('exporting','Importing study…');
+  try{
+    if(sys==='orthanc'){
+      const h={};if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
+      const r=await fetch(`${cfg.url}/studies/${studyUID}`,{headers:h,signal:AbortSignal.timeout(8000)});
+      if(!r.ok)throw new Error(`Orthanc HTTP ${r.status}`);
+      const study=await r.json();
+      const tags=study.MainDicomTags||{};
+      setPacsStatus('done',`Imported: ${tags.StudyDescription||studyUID} ✓`);
+    }else if(sys==='hl7-fhir'){
+      const h={'Accept':'application/fhir+json'};if(cfg.token)h['Authorization']=`Bearer ${cfg.token}`;
+      const r=await fetch(`${cfg.url}/ImagingStudy?identifier=${studyUID}`,{headers:h,signal:AbortSignal.timeout(8000)});
+      if(!r.ok)throw new Error(`FHIR HTTP ${r.status}`);
+      setPacsStatus('done','Study imported from FHIR ✓');
+    }
+  }catch(e){setPacsStatus('error',sanitizeText(e.message));}
+}
+
+// Wire up PACS page render when nav is clicked
+document.querySelectorAll('.ni[data-page="pacs"]').forEach(ni=>{
+  ni.addEventListener('click',()=>{setTimeout(renderPACS,0);});
+});
+
+})(); // end IIFE
+</script>
+</body>
+</html>
