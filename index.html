@@ -324,11 +324,17 @@ tr:hover td{background:var(--s2)}
     FOR RESEARCH USE ONLY — Not validated for clinical diagnosis. Not CE marked. Not for use in patient care decisions.
   </div>
   <!-- API key bar -->
-  <div class="api-bar">
+  <div class="api-bar" id="api-bar">
     <label>Anthropic API Key</label>
     <input type="password" id="apikey" placeholder="sk-ant-…" oninput="setApiKey(this.value)" autocomplete="off" spellcheck="false">
+    <button onclick="saveAndHideKey()" style="background:var(--accent,#4f8ef7);color:#fff;border:none;border-radius:6px;padding:5px 13px;font-size:12px;cursor:pointer;font-family:inherit">Save &amp; Remember</button>
     <span class="api-status unset" id="api-status">Not set</span>
-    <span style="color:var(--t3);font-size:11px">Session-only — never stored (HIPAA §164.312)</span>
+    <span style="color:var(--t3);font-size:11px">Saved in this browser only — never sent to any server except Anthropic</span>
+  </div>
+  <!-- Collapsed key bar shown when key is already saved -->
+  <div class="api-bar" id="api-bar-saved" style="display:none;justify-content:flex-end;padding:5px 15px;min-height:unset">
+    <span style="color:#34d399;font-size:12px">🔑 API key saved</span>
+    <button onclick="showKeyBar()" style="background:transparent;border:1px solid var(--border-light,#252840);border-radius:5px;color:var(--t3,#6b7494);font-size:11px;padding:3px 10px;cursor:pointer;font-family:inherit;margin-left:10px">Change key</button>
   </div>
   <main class="main">
 
@@ -528,16 +534,43 @@ function sanitizeText(str){
   return String(str).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g,''); // strip control chars
 }
 
-/* ── API KEY — scoped, not global ── */
+/* ── API KEY — localStorage persistence ── */
 let _apiKey='';
 function setApiKey(v){
   _apiKey=v.trim();
   const el=document.getElementById('api-status');
-  el.textContent=_apiKey?'Set ✓':'Not set';
-  el.className='api-status '+(_apiKey?'set':'unset');
+  if(el){ el.textContent=_apiKey?'Set ✓':'Not set'; el.className='api-status '+(_apiKey?'set':'unset'); }
   if(_apiKey) audit('API key configured','ok');
 }
-window.setApiKey=setApiKey; // expose only the setter, not the key
+function saveAndHideKey(){
+  const input=document.getElementById('apikey');
+  if(!input||!input.value.trim()){ alert('Please enter your API key first.'); return; }
+  setApiKey(input.value);
+  try{ localStorage.setItem('nrr_api_key', _apiKey); } catch(e){}
+  document.getElementById('api-bar').style.display='none';
+  document.getElementById('api-bar-saved').style.display='flex';
+}
+function showKeyBar(){
+  document.getElementById('api-bar-saved').style.display='none';
+  document.getElementById('api-bar').style.display='flex';
+  const input=document.getElementById('apikey');
+  if(input){ input.value=_apiKey; input.focus(); }
+}
+function loadSavedKey(){
+  try{
+    const saved=localStorage.getItem('nrr_api_key');
+    if(saved && saved.startsWith('sk-ant')){
+      setApiKey(saved);
+      const input=document.getElementById('apikey');
+      if(input) input.value=saved;
+      document.getElementById('api-bar').style.display='none';
+      document.getElementById('api-bar-saved').style.display='flex';
+    }
+  } catch(e){}
+}
+window.setApiKey=setApiKey;
+window.saveAndHideKey=saveAndHideKey;
+window.showKeyBar=showKeyBar;
 
 /* ── NAV — data-page / addEventListener, no onclick attributes ── */
 function showPage(id){
@@ -1821,6 +1854,9 @@ async function importStudy(studyUID,source){
 document.querySelectorAll('.ni[data-page="pacs"]').forEach(ni=>{
   ni.addEventListener('click',()=>{setTimeout(renderPACS,0);});
 });
+
+// Load saved API key from localStorage on startup
+loadSavedKey();
 
 })(); // end IIFE
 </script>
