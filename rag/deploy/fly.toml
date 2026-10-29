@@ -1,0 +1,29 @@
+# Fly.io deployment config for NeuroRadReporter RAG server
+# Deploy with: fly launch --config rag/deploy/fly.toml
+
+app = "neurorad-rag"
+primary_region = "ams"  # Amsterdam — close to your users
+
+[build]
+  dockerfile = "rag/deploy/Dockerfile"
+
+[env]
+  PORT = "8080"
+  PYTHONUNBUFFERED = "1"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true   # saves cost when idle
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
+
+# Persistent volume for ChromaDB — survives redeploys
+[mounts]
+  source = "neurorad_rag_data"
+  destination = "/app/rag/data"

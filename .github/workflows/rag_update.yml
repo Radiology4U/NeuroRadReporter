@@ -63,3 +63,15 @@ jobs:
           name: chroma-db
           path: rag/data/chroma_db/
           retention-days: 30
+
+  redeploy-fly:
+    needs: update-knowledge-base
+    runs-on: ubuntu-latest
+    if: ${{ secrets.FLY_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy updated data to Fly.io
+        run: fly deploy --config rag/deploy/fly.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
