@@ -1504,14 +1504,31 @@ window.sendChat=async function(){
     }
   }catch(e){console.warn('PubMed RAG:',e.message);}
 
+  // Capture current DICOM canvas for vision analysis
+  let imageContent=[];
+  const mainCv=document.getElementById('main-canvas');
+  if(mainCv&&mainCv.width>0){
+    try{
+      // Capture up to 3 key slices: current, middle, last
+      const vs2=viewSlices.length?viewSlices:slices;
+      const idxs=[...new Set([curSlice,Math.floor(vs2.length/2),vs2.length-1])].slice(0,3);
+      for(const idx of idxs){
+        const tmpCv=document.createElement('canvas');
+        drawCanvas(vs2[idx],tmpCv);
+        const b64=tmpCv.toDataURL('image/png').split(',')[1];
+        if(b64)imageContent.push({type:'image',source:{type:'base64',media_type:'image/png',data:b64}});
+      }
+    }catch(imgErr){console.warn('Image capture:',imgErr);}
+  }
+
   try{
     const r=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({
         model:settings.model,max_tokens:settings.tokens,
-        system:`You are a board-certified neuroradiologist AI. ${ctx} Reply in ${settings.lang}. Be concise and clinically precise.`+(ragContext?'\n\n'+ragContext:''),
-        messages:[{role:'user',content:prompt}]
+        system:`You are a board-certified neuroradiologist AI. ${ctx} Carefully analyse every image sent — describe ALL visible abnormalities. Do NOT assume normal findings. Reply in ${settings.lang}. Be concise and clinically precise.`+(ragContext?'\n\n'+ragContext:''),
+        messages:[{role:'user',content:[...imageContent,{type:'text',text:prompt}]}]
       })
     });
     if(!r.ok){const j=await r.json();throw new Error(j.error?.message||r.statusText);}
