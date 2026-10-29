@@ -236,6 +236,12 @@ body{background:var(--bg);color:var(--tx);font-family:var(--font);font-size:13px
 .btn.danger:hover{background:var(--rdl)}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 .btn-row{display:flex;gap:8px;flex-wrap:wrap}
+.ai-action-row{display:flex;gap:10px}
+.ai-action-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;border:1.5px solid var(--bd);border-radius:10px;background:var(--s1);cursor:pointer;transition:all .15s;color:var(--t1)}
+.ai-action-btn:hover{border-color:var(--ac);background:var(--s2);transform:translateY(-1px);box-shadow:0 3px 10px rgba(0,0,0,.12)}
+.ai-action-btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.ai-action-icon{font-size:24px;line-height:1}
+.ai-action-label{font-size:12px;font-weight:600;color:var(--t2)}
 
 /* Forms */
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -644,16 +650,30 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
               <span class="spin" id="ai-spin" style="display:none"></span>
               🧠 NeuroRadReporter Assistant
             </div>
-            <div class="card-body" style="padding:0">
-              <div class="chat-area">
+            <div class="card-body" style="padding:12px 12px 0">
+              <div class="ai-action-row">
+                <button class="ai-action-btn" id="btn-full-report" onclick="generateReport()" title="Analyse all slices and generate a complete structured radiology report">
+                  <span class="ai-action-icon">📋</span>
+                  <span class="ai-action-label">Full Report</span>
+                </button>
+                <button class="ai-action-btn" id="btn-summary" onclick="generateSummary()" title="Generate a concise clinical summary of key findings">
+                  <span class="ai-action-icon">🔍</span>
+                  <span class="ai-action-label">Summary</span>
+                </button>
+                <button class="ai-action-btn" id="btn-differential" onclick="generateDifferential()" title="Generate ranked differential diagnosis with rationale">
+                  <span class="ai-action-icon">⚖️</span>
+                  <span class="ai-action-label">Differential Dx</span>
+                </button>
+              </div>
+              <div class="chat-area" style="margin-top:8px">
                 <div class="chat-msgs" id="chat-msgs">
                   <div class="chat-welcome">
                     <div class="chat-welcome-icon">🧠</div>
-                    Ask about findings, request a full report, or click <strong>Generate Report</strong> to auto-fill the structured form below…
+                    Choose an action above — results auto-fill the structured report below.
                   </div>
                 </div>
                 <div class="chat-input-row">
-                  <textarea class="chat-input" id="chat-input" placeholder="e.g. List differential diagnoses for these findings…" rows="1"
+                  <textarea class="chat-input" id="chat-input" placeholder="Or ask a follow-up question…" rows="1"
                     onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
                   <button class="chat-send" id="chat-send" onclick="sendChat()">Send ↵</button>
                 </div>
@@ -685,11 +705,10 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
                 <div class="fg full"><label>Impression</label><textarea class="inp" id="sf-imp" placeholder="Clinical impression and recommendations…" rows="3"></textarea></div>
               </div>
               <div class="btn-row">
-                <button class="btn pri" onclick="generateReport()">✨ Generate Report</button>
                 <button class="btn sm" onclick="copyReport()">📋 Copy</button>
                 <button class="btn sm" onclick="exportHL7()">📤 HL7 FHIR</button>
                 <button class="btn sm" onclick="exportSR()">📤 DICOM SR</button>
-                <button class="btn sm" onclick="finalizeReport()">✅ Finalize</button>
+                <button class="btn pri" onclick="finalizeReport()">✅ Finalize</button>
               </div>
             </div>
           </div>
@@ -1589,9 +1608,28 @@ window.sendChat=async function(){
     document.getElementById('chat-send').disabled=false;
   }
 };
+function setActionBusy(busy){
+  ['btn-full-report','btn-summary','btn-differential'].forEach(id=>{
+    document.getElementById(id).disabled=busy;
+  });
+}
 window.generateReport=async function(){
-  document.getElementById('chat-input').value='Generate a complete structured neuroradiology report. Output EXACTLY these labeled sections:\n\nTECHNIQUE:\n[technique text]\n\nFINDINGS:\n[detailed findings by anatomical region]\n\nIMPRESSION:\n[clinical impression and recommendations]\n\nURGENCY:\n[Routine | Semi-urgent (2 weeks) | Urgent (48h) | STAT — notify immediately]';
+  document.getElementById('chat-input').value='Generate a complete structured neuroradiology report. Output EXACTLY these labeled sections:\n\nTECHNIQUE:\n[technique text]\n\nFINDINGS:\n[detailed findings by anatomical region, one per anatomical area]\n\nIMPRESSION:\n[clinical impression and key diagnosis]\n\nURGENCY:\n[Routine | Semi-urgent (2 weeks) | Urgent (48h) | STAT — notify immediately]';
+  setActionBusy(true);
   await sendChat();
+  setActionBusy(false);
+};
+window.generateSummary=async function(){
+  document.getElementById('chat-input').value='Generate a concise clinical summary of the key imaging findings. Format as:\n\nFINDINGS:\n[2–4 sentence summary of the most important findings]\n\nIMPRESSION:\n[1–2 sentence overall impression]';
+  setActionBusy(true);
+  await sendChat();
+  setActionBusy(false);
+};
+window.generateDifferential=async function(){
+  document.getElementById('chat-input').value='Based on the imaging, provide a ranked differential diagnosis. Format as:\n\nFINDINGS:\n[Brief description of the imaging features driving the differential]\n\nIMPRESSION:\nDifferential diagnosis (most to least likely):\n1. [Most likely diagnosis] — [rationale]\n2. [Second] — [rationale]\n3. [Third] — [rationale]\nRecommended next step: [recommendation]';
+  setActionBusy(true);
+  await sendChat();
+  setActionBusy(false);
 };
 
 // Parse AI response text and auto-fill the structured report form
@@ -1677,8 +1715,42 @@ window.exportSR=function(){
 window.finalizeReport=function(){
   const imp=document.getElementById('sf-imp').value;
   if(!imp){toast('Add impression first','warn');return;}
-  audit('REP','Report FINALIZED — '+new Date().toISOString());
-  toast('Report finalized & signed ✓','ok');
+  const now=new Date();
+  const dateStr=now.toISOString().slice(0,10);
+  const timeStr=now.toTimeString().slice(0,8).replace(/:/g,'');
+  const pid=document.getElementById('sf-ind').value.replace(/^Patient ID:\s*/,'').split(',')[0].trim()||'ANON';
+  const lines=[
+    '═══════════════════════════════════════════════════════',
+    '  NeuroRadReporter — Finalized Radiology Report',
+    '═══════════════════════════════════════════════════════',
+    'Date: '+now.toLocaleString(),
+    settings.inst?'Institution: '+settings.inst:'',
+    settings.rad?'Reporting Radiologist: '+settings.rad:'',
+    'Patient ID: '+pid,
+    '───────────────────────────────────────────────────────',
+    'INDICATION',
+    document.getElementById('sf-ind').value||'—',
+    '',
+    'TECHNIQUE',
+    (document.getElementById('sf-tech').value||'—')+
+    (document.getElementById('sf-mod').value?' ['+document.getElementById('sf-mod').value+']':''),
+    '',
+    'FINDINGS',
+    document.getElementById('sf-find').value||'—',
+    '',
+    'IMPRESSION',
+    document.getElementById('sf-imp').value||'—',
+    '',
+    'URGENCY: '+(document.getElementById('sf-urg').value||'—'),
+    '───────────────────────────────────────────────────────',
+    'Generated by NeuroRadReporter v1.0 (research use only)',
+    'Not validated for clinical diagnosis. Not CE marked.',
+    '═══════════════════════════════════════════════════════',
+  ].filter(l=>l!==undefined).join('\n');
+  const fname='report_'+pid.replace(/[^a-zA-Z0-9]/g,'_')+'_'+dateStr+'_'+timeStr+'.txt';
+  dl(fname, lines, 'text/plain');
+  audit('REP','Report FINALIZED — saved as '+fname);
+  toast('Report saved as '+fname,'ok');
 };
 
 /* ── PACS ── */
