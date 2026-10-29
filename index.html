@@ -430,53 +430,46 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
     <nav id="sidebar">
       <div class="sb-brand">
         <div class="sb-logo">
-          <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;filter:drop-shadow(0 3px 8px rgba(0,0,0,0.5))">
+          <svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.45))">
             <defs>
-              <!-- main body gradient: top-lit 3D look -->
-              <linearGradient id="bg3d" x1="8" y1="0" x2="28" y2="36" gradientUnits="userSpaceOnUse">
-                <stop offset="0%" stop-color="#e85555"/>
-                <stop offset="45%" stop-color="#c0392b"/>
-                <stop offset="100%" stop-color="#7b1515"/>
+              <linearGradient id="ic-bg" x1="0" y1="0" x2="38" y2="38" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="#ff6b6b"/>
+                <stop offset="100%" stop-color="#9b1c1c"/>
               </linearGradient>
-              <!-- gloss shine -->
-              <linearGradient id="shine" x1="10" y1="2" x2="26" y2="18" gradientUnits="userSpaceOnUse">
-                <stop offset="0%" stop-color="#fff" stop-opacity=".38"/>
+              <linearGradient id="ic-shine" x1="4" y1="3" x2="22" y2="16" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="#fff" stop-opacity=".32"/>
                 <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
               </linearGradient>
-              <!-- inner glow on brain -->
-              <radialGradient id="bglow" cx="50%" cy="40%" r="50%">
-                <stop offset="0%" stop-color="#fff" stop-opacity=".22"/>
-                <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
-              </radialGradient>
+              <clipPath id="ic-clip"><rect width="38" height="38" rx="10"/></clipPath>
             </defs>
 
-            <!-- base tile -->
-            <rect width="36" height="36" rx="9" fill="url(#bg3d)"/>
-            <!-- bottom edge shadow for depth -->
-            <rect x="1" y="20" width="34" height="15" rx="0" fill="rgba(0,0,0,0.18)"/>
-            <rect width="36" height="36" rx="9" fill="url(#bglow)"/>
-            <!-- gloss pill top-left -->
-            <ellipse cx="14" cy="9" rx="8" ry="4.5" fill="url(#shine)" opacity=".9"/>
+            <!-- tile -->
+            <rect width="38" height="38" rx="10" fill="url(#ic-bg)"/>
+            <!-- gloss overlay -->
+            <rect width="38" height="38" rx="10" fill="url(#ic-shine)"/>
+            <!-- subtle inner border for depth -->
+            <rect x=".75" y=".75" width="36.5" height="36.5" rx="9.4" stroke="rgba(255,255,255,0.18)" stroke-width="1.5" fill="none"/>
 
-            <!-- BRAIN — clean symmetric lobes -->
-            <!-- left lobe outline -->
-            <path d="M9.5 20.5c-.8-.9-1.5-2.1-1.5-3.5 0-1.2.45-2.3 1.2-3.1-.2-.5-.2-1-.2-1.4C9 10.3 11 8.5 13.5 8.5c.9 0 1.7.25 2.4.7V22c-.5.15-1 .2-1.5.2-1.7 0-3.2-.65-4.4-1.7z" fill="#fff" opacity=".92"/>
-            <!-- left lobe inner shadow -->
-            <path d="M11 20c-.5-.7-.9-1.6-.9-2.5 0-.9.3-1.7.8-2.3l.1-.15c-.1-.35-.1-.65-.1-.9 0-1.6 1-2.9 2.5-3.4V21.9C12.6 21.2 11.7 20.7 11 20z" fill="rgba(0,0,0,0.12)"/>
-            <!-- right lobe outline -->
-            <path d="M26.5 20.5c.8-.9 1.5-2.1 1.5-3.5 0-1.2-.45-2.3-1.2-3.1.2-.5.2-1 .2-1.4C27 10.3 25 8.5 22.5 8.5c-.9 0-1.7.25-2.4.7V22c.5.15 1 .2 1.5.2 1.7 0 3.2-.65 4.4-1.7z" fill="#fff" opacity=".78"/>
-            <!-- corpus callosum bridge -->
-            <path d="M15.9 10.2 Q18 9.2 20.1 10.2 L20.1 21.8 Q18 22.8 15.9 21.8 Z" fill="rgba(255,255,255,0.25)"/>
-            <!-- sulci lines left -->
-            <path d="M11.5 13.5 Q13 12.8 14.5 13.5" stroke="rgba(180,40,40,0.5)" stroke-width=".7" fill="none" stroke-linecap="round"/>
-            <path d="M11 17 Q12.8 16.2 14.5 17" stroke="rgba(180,40,40,0.45)" stroke-width=".7" fill="none" stroke-linecap="round"/>
-            <!-- sulci lines right -->
-            <path d="M21.5 13.5 Q23 12.8 24.5 13.5" stroke="rgba(140,30,30,0.5)" stroke-width=".7" fill="none" stroke-linecap="round"/>
-            <path d="M21.5 17 Q23 16.2 24.5 17" stroke="rgba(140,30,30,0.45)" stroke-width=".7" fill="none" stroke-linecap="round"/>
-            <!-- brainstem -->
-            <rect x="16.2" y="21.8" width="3.6" height="4.5" rx="1.8" fill="#fff" opacity=".6"/>
-            <!-- top highlight dot -->
-            <circle cx="13" cy="11.5" r="1.4" fill="#fff" opacity=".95"/>
+            <!-- MRI cross-section rings — clean, geometric, professional -->
+            <!-- outer ring -->
+            <circle cx="19" cy="18" r="10" stroke="rgba(255,255,255,0.9)" stroke-width="1.5" fill="none"/>
+            <!-- mid ring -->
+            <circle cx="19" cy="18" r="6.5" stroke="rgba(255,255,255,0.55)" stroke-width="1" fill="none"/>
+            <!-- inner fill — white matter core -->
+            <circle cx="19" cy="18" r="3.5" fill="rgba(255,255,255,0.22)"/>
+            <circle cx="19" cy="18" r="3.5" stroke="rgba(255,255,255,0.5)" stroke-width=".8" fill="none"/>
+
+            <!-- cross-hairs — MRI localization lines -->
+            <line x1="19" y1="7" x2="19" y2="11" stroke="rgba(255,255,255,0.7)" stroke-width="1.2" stroke-linecap="round"/>
+            <line x1="19" y1="25" x2="19" y2="29" stroke="rgba(255,255,255,0.7)" stroke-width="1.2" stroke-linecap="round"/>
+            <line x1="8" y1="18" x2="12" y2="18" stroke="rgba(255,255,255,0.7)" stroke-width="1.2" stroke-linecap="round"/>
+            <line x1="26" y1="18" x2="30" y2="18" stroke="rgba(255,255,255,0.7)" stroke-width="1.2" stroke-linecap="round"/>
+
+            <!-- center dot -->
+            <circle cx="19" cy="18" r="1.6" fill="#fff"/>
+
+            <!-- top-left specular highlight -->
+            <ellipse cx="13" cy="10" rx="5" ry="3" fill="rgba(255,255,255,0.15)" transform="rotate(-20 13 10)"/>
           </svg>
           <div style="background:rgba(0,0,0,0.35);border-radius:6px;padding:5px 8px;backdrop-filter:blur(4px)">
             <div style="font-size:16px;font-weight:900;color:#fff;letter-spacing:-.4px;line-height:1.2;text-shadow:0 1px 8px rgba(0,0,0,0.8)">NeuroRad<span style="color:#fca5a5">Reporter</span></div>
