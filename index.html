@@ -911,6 +911,17 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
               <div class="btn-row" style="margin-top:10px">
                 <button class="btn pri sm" onclick="saveSettings()">Save</button>
               </div>
+          <div class="card">
+            <div class="card-hdr">🧠 RAG Knowledge Base</div>
+            <div class="card-body">
+              <p style="font-size:12px;color:var(--t2);margin-bottom:10px">Connect to your RAG server to enrich AI reports with similar cases from PubMed &amp; Radiopaedia. <a href="https://github.com/Radiology4U/NeuroRadReporter/tree/main/rag" target="_blank" style="color:var(--blue)">Setup guide</a></p>
+              <div class="form-grid">
+                <div class="fg"><label>RAG Server URL</label><input class="inp" id="set-rag-url" placeholder="http://localhost:8765" oninput="localStorage.setItem('nrr_rag_url',this.value)"/></div>
+              </div>
+              <div class="btn-row" style="margin-top:10px;gap:8px">
+                <button class="btn pri sm" onclick="testRag()">Test connection</button>
+                <span id="rag-status" style="font-size:11px;color:var(--t2)"></span>
+              </div>
             </div>
           </div>
         </div>
@@ -987,6 +998,7 @@ function loadSettings(){
   document.getElementById('set-lang').value=settings.lang;
   document.getElementById('set-inst').value=settings.inst;
   document.getElementById('set-rad').value=settings.rad;
+  try{const ru=localStorage.getItem('nrr_rag_url');if(ru)document.getElementById('set-rag-url').value=ru;}catch{}
 }
 window.saveSettings=function(){
   settings.model=document.getElementById('set-model').value;
@@ -996,6 +1008,18 @@ window.saveSettings=function(){
   settings.rad=document.getElementById('set-rad').value;
   try{localStorage.setItem('nrr_settings',JSON.stringify(settings));}catch{}
   toast('Settings saved','ok');audit('SYS','Settings saved');
+};
+window.testRag=async function(){
+  const url=(document.getElementById('set-rag-url')?.value||'').trim();
+  if(!url){toast('Enter RAG server URL first','err');return;}
+  localStorage.setItem('nrr_rag_url',url);
+  const st=document.getElementById('rag-status');
+  st.textContent='Testing…';
+  try{
+    const r=await fetch(url+'/retrieve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'brain MRI findings',n:1})});
+    if(r.ok){st.style.color='var(--gr)';st.textContent='✓ Connected — RAG active';toast('RAG connected','ok');}
+    else{st.style.color='var(--rd)';st.textContent='✗ Server error '+r.status;}
+  }catch(e){st.style.color='var(--rd)';st.textContent='✗ '+e.message;}
 };
 window.resetAll=function(){
   if(!confirm('Clear all saved data including API key?'))return;
@@ -1455,13 +1479,30 @@ window.sendChat=async function(){
 
   const vs=viewSlices.length?viewSlices:slices;
   const ctx=vs.length?`Study: ${vs[0].patientName||'ANON'}, modality ${vs[0].modality||'unknown'}, series "${vs[0].seriesDesc||''}", ${vs.length} images. Patient DOB: ${vs[0].patientDOB||'unknown'}. Study date: ${vs[0].studyDate||'unknown'}.`:'No DICOM loaded.';
+
+  // RAG: retrieve similar cases from literature
+  let ragContext='';
+  const ragUrl=localStorage.getItem('nrr_rag_url')||'';
+  if(ragUrl){
+    try{
+      const ragRes=await fetch(ragUrl+'/retrieve',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({text:prompt,n:3})
+      });
+      if(ragRes.ok){const ragData=await ragRes.json();ragContext=ragData.context||'';}
+    }catch(e){console.warn('RAG unavailable:',e.message);}
+  }
+
   try{
     const r=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({
         model:settings.model,max_tokens:settings.tokens,
-        system:`You are a board-certified neuroradiologist AI. ${ctx} Reply in ${settings.lang}. Be concise and clinically precise.`,
+        system:`You are a board-certified neuroradiologist AI. ${ctx} Reply in ${settings.lang}. Be concise and clinically precise.${ragContext?'
+
+'+ragContext:''}`,
         messages:[{role:'user',content:prompt}]
       })
     });
