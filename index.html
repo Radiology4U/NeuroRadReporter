@@ -638,6 +638,29 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
             <div class="filmstrip" id="filmstrip"><span style="color:#333;font-size:11px;padding:0 4px">No images loaded</span></div>
           </div>
 
+          <!-- NeuroRadReporter Assistant -->
+          <div class="card">
+            <div class="card-hdr">
+              <span class="spin" id="ai-spin" style="display:none"></span>
+              🧠 NeuroRadReporter Assistant
+            </div>
+            <div class="card-body" style="padding:0">
+              <div class="chat-area">
+                <div class="chat-msgs" id="chat-msgs">
+                  <div class="chat-welcome">
+                    <div class="chat-welcome-icon">🧠</div>
+                    Ask about findings, request a full report, or click <strong>Generate Report</strong> to auto-fill the structured form below…
+                  </div>
+                </div>
+                <div class="chat-input-row">
+                  <textarea class="chat-input" id="chat-input" placeholder="e.g. List differential diagnoses for these findings…" rows="1"
+                    onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
+                  <button class="chat-send" id="chat-send" onclick="sendChat()">Send ↵</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Structured report -->
           <div class="card">
             <div class="card-hdr">📄 Structured Report</div>
@@ -658,38 +681,15 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
                     <option>STAT — notify immediately</option>
                   </select>
                 </div>
-                <div class="fg full"><label>Findings</label><textarea class="inp" id="sf-find" placeholder="Key imaging findings by anatomical region…" rows="3"></textarea></div>
+                <div class="fg full"><label>Findings</label><textarea class="inp" id="sf-find" placeholder="Key imaging findings by anatomical region…" rows="4"></textarea></div>
                 <div class="fg full"><label>Impression</label><textarea class="inp" id="sf-imp" placeholder="Clinical impression and recommendations…" rows="3"></textarea></div>
               </div>
               <div class="btn-row">
-                <button class="btn pri" onclick="generateReport()">✨ Generate with AI</button>
+                <button class="btn pri" onclick="generateReport()">✨ Generate Report</button>
                 <button class="btn sm" onclick="copyReport()">📋 Copy</button>
                 <button class="btn sm" onclick="exportHL7()">📤 HL7 FHIR</button>
                 <button class="btn sm" onclick="exportSR()">📤 DICOM SR</button>
                 <button class="btn sm" onclick="finalizeReport()">✅ Finalize</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- AI Chat -->
-          <div class="card">
-            <div class="card-hdr">
-              <span class="spin" id="ai-spin" style="display:none"></span>
-              💬 AI Assistant (Claude)
-            </div>
-            <div class="card-body" style="padding:0">
-              <div class="chat-area">
-                <div class="chat-msgs" id="chat-msgs">
-                  <div class="chat-welcome">
-                    <div class="chat-welcome-icon">🧠</div>
-                    Ask about findings, differentials, or request a full report…
-                  </div>
-                </div>
-                <div class="chat-input-row">
-                  <textarea class="chat-input" id="chat-input" placeholder="e.g. List differential diagnoses for these findings…" rows="1"
-                    onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
-                  <button class="chat-send" id="chat-send" onclick="sendChat()">Send ↵</button>
-                </div>
               </div>
             </div>
           </div>
@@ -1576,6 +1576,8 @@ window.sendChat=async function(){
     am.innerHTML=`<div class="msg-bubble">${esc(txt)}</div>`;
     msgs.appendChild(am);msgs.scrollTop=msgs.scrollHeight;
     audit('AI','Response: '+txt.length+' chars');
+    // Auto-fill structured report form if response contains labelled sections
+    if(/FINDINGS:|IMPRESSION:/i.test(txt)) fillReportFromAI(txt);
   }catch(e){
     const am=document.createElement('div');am.className='msg ai';
     am.innerHTML=`<div class="msg-bubble" style="color:var(--rd)">Error: ${esc(e.message)}</div>`;
@@ -1588,9 +1590,51 @@ window.sendChat=async function(){
   }
 };
 window.generateReport=async function(){
-  document.getElementById('chat-input').value='Generate a complete structured neuroradiology report with Technique, Findings by anatomical region, and Impression. Fill in the form fields above as well.';
+  document.getElementById('chat-input').value='Generate a complete structured neuroradiology report. Output EXACTLY these labeled sections:\n\nTECHNIQUE:\n[technique text]\n\nFINDINGS:\n[detailed findings by anatomical region]\n\nIMPRESSION:\n[clinical impression and recommendations]\n\nURGENCY:\n[Routine | Semi-urgent (2 weeks) | Urgent (48h) | STAT — notify immediately]';
   await sendChat();
 };
+
+// Parse AI response text and auto-fill the structured report form
+function fillReportFromAI(txt){
+  function extract(label,nextLabels){
+    const pat=new RegExp(label+':\\s*([\\s\\S]*?)(?=(?:'+nextLabels.join('|')+'):|$)','i');
+    const m=txt.match(pat);
+    return m?m[1].trim():'';
+  }
+  const technique=extract('TECHNIQUE',['FINDINGS','IMPRESSION','URGENCY']);
+  const findings=extract('FINDINGS',['IMPRESSION','URGENCY']);
+  const impression=extract('IMPRESSION',['URGENCY']);
+  const urgencyRaw=extract('URGENCY',[]);
+
+  if(technique) document.getElementById('sf-tech').value=technique;
+  if(findings)  document.getElementById('sf-find').value=findings;
+  if(impression)document.getElementById('sf-imp').value=impression;
+
+  // Map urgency text to select option
+  if(urgencyRaw){
+    const urg=document.getElementById('sf-urg');
+    const opts=[...urg.options].map(o=>o.value);
+    const match=opts.find(o=>o&&urgencyRaw.toLowerCase().includes(o.toLowerCase().split(' ')[0]));
+    if(match) urg.value=match;
+  }
+
+  // Auto-detect modality from technique
+  if(technique){
+    const mod=document.getElementById('sf-mod');
+    if(/\bMRS\b/i.test(technique)) mod.value='MRS';
+    else if(/\bfMRI\b/i.test(technique)) mod.value='fMRI';
+    else if(/\bMRA\b/i.test(technique)) mod.value='MRA';
+    else if(/\bMRI\b|magnetic resonance/i.test(technique)) mod.value='MRI';
+    else if(/\bCT\b|computed tomography/i.test(technique)) mod.value='CT';
+    else if(/\bPET/i.test(technique)) mod.value='PET-CT';
+  }
+
+  if(findings||impression){
+    toast('Report fields auto-filled ✓','ok');
+    // Scroll down to show the structured report
+    document.querySelector('#sf-find')?.scrollIntoView({behavior:'smooth',block:'center'});
+  }
+}
 
 /* ── REPORT ── */
 window.copyReport=function(){
