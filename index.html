@@ -60,9 +60,9 @@ body{background:var(--bg);color:var(--tx);font-family:var(--font);font-size:13px
 }
 #sidebar>*{position:relative;z-index:1;}
 .sb-brand{padding:16px 16px 12px;border-bottom:1px solid rgba(255,255,255,0.07);background:rgba(0,0,0,0.5);}
-.sb-logo{font-size:15px;font-weight:700;color:var(--tx);letter-spacing:-.3px}
-.sb-logo span{color:var(--acm)}
-.sb-sub{font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.8px;margin-top:2px}
+.sb-logo{font-size:15px;font-weight:700;color:#fff;letter-spacing:-.3px;display:flex;align-items:center;gap:8px}
+.sb-logo span{color:#f87171}
+.sb-sub{font-size:9px;color:rgba(255,255,255,0.35);text-transform:uppercase;letter-spacing:.9px;margin-top:3px;font-weight:500}
 .sb-section{padding:12px 16px 4px;font-size:9px;font-weight:700;color:rgba(255,255,255,0.32);text-transform:uppercase;letter-spacing:1.4px;background:transparent;}
 .sb-item{
   display:flex;align-items:center;gap:10px;
@@ -429,7 +429,18 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
     <!-- SIDEBAR -->
     <nav id="sidebar">
       <div class="sb-brand">
-        <div class="sb-logo">NeuroRad<span>Reporter</span></div>
+        <div class="sb-logo">
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0">
+            <rect width="26" height="26" rx="7" fill="rgba(248,113,113,0.18)"/>
+            <path d="M13 5C10.24 5 8 7.01 8 9.5c0 .55.1 1.08.3 1.57C7.5 11.56 7 12.48 7 13.5c0 1.24.67 2.33 1.67 2.95C8.87 16.93 9 17.45 9 18c0 1.1.9 2 2 2 .55 0 1.05-.22 1.41-.59.35.37.85.59 1.41.59.56 0 1.06-.22 1.42-.59C15.59 19.78 16.09 20 16.65 20c1.27 0 2.22-1.07 2.11-2.33.82-.63 1.34-1.6 1.24-2.68-.07-.73-.44-1.38-.98-1.85.6-.57.97-1.35.98-2.21C20 8.69 16.87 5 13 5z" fill="#f87171" opacity=".9"/>
+            <circle cx="11" cy="12" r="1.1" fill="rgba(255,255,255,0.8)"/>
+            <circle cx="15" cy="11.5" r=".8" fill="rgba(255,255,255,0.6)"/>
+            <path d="M11 15.5 Q13 14.5 15 15.5" stroke="rgba(255,255,255,0.5)" stroke-width=".8" fill="none" stroke-linecap="round"/>
+          </svg>
+          <div>
+            <div style="font-size:15px;font-weight:800;color:#fff;letter-spacing:-.3px;line-height:1">NeuroRad<span style="color:#f87171">Reporter</span></div>
+          </div>
+        </div>
         <div class="sb-sub">Automatic Neuroradiology Reporting</div>
       </div>
 
