@@ -57,21 +57,22 @@ body{background:var(--bg);color:var(--tx);font-family:var(--font);font-size:13px
   filter:grayscale(100%) contrast(1.1) brightness(0.85);
 }
 #sidebar>*{position:relative;z-index:1;}
-.sb-brand{padding:14px 14px 10px;border-bottom:1px solid var(--bd);background:rgba(255,255,255,0.85)}
+.sb-brand{padding:14px 14px 10px;border-bottom:1px solid var(--bd);background:rgba(255,255,255,0.55)}
 .sb-logo{font-size:15px;font-weight:700;color:var(--tx);letter-spacing:-.3px}
 .sb-logo span{color:var(--acm)}
 .sb-sub{font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.8px;margin-top:2px}
-.sb-section{padding:10px 10px 4px;font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.8px;background:rgba(247,246,243,0.8);}
+.sb-section{padding:10px 10px 4px;font-size:10px;font-weight:700;color:#5a4e44;text-transform:uppercase;letter-spacing:.8px;background:transparent;text-shadow:0 1px 0 rgba(255,255,255,0.6);}
 .sb-item{
   display:flex;align-items:center;gap:8px;
   padding:7px 12px;border-radius:var(--rs);margin:1px 6px;
   cursor:pointer;font-size:13px;color:var(--t2);
   transition:background .1s,color .1s;position:relative;
-  border:none;background:rgba(255,255,255,0.72);text-align:left;width:calc(100% - 12px);
-  font-family:var(--font);backdrop-filter:blur(0px);
+  border:none;background:transparent;text-align:left;width:calc(100% - 12px);
+  font-family:var(--font);font-weight:600;color:#2a2420;
+  text-shadow:0 1px 0 rgba(255,255,255,0.7);
 }
-.sb-item:hover{background:rgba(255,255,255,0.9);color:var(--tx)}
-.sb-item.active{background:rgba(230,237,244,0.95);color:var(--ac);font-weight:500}
+.sb-item:hover{background:rgba(255,255,255,0.5);color:#111}
+.sb-item.active{background:rgba(210,228,245,0.75);color:var(--ac);font-weight:700}
 .sb-item .icon{width:16px;text-align:center;flex-shrink:0;font-size:14px}
 .sb-badge{
   margin-left:auto;min-width:18px;height:18px;
@@ -84,7 +85,7 @@ body{background:var(--bg);color:var(--tx);font-family:var(--font);font-size:13px
 .sb-badge.gray{background:var(--s3);color:var(--t2)}
 .sb-footer{
   margin-top:auto;padding:10px 14px;border-top:1px solid var(--bd);
-  font-size:11px;color:var(--t3);background:rgba(255,255,255,0.85);
+  font-size:11px;color:#6b5f55;font-weight:600;background:rgba(255,255,255,0.55);
 }
 .sb-footer strong{color:var(--t2);display:block;margin-bottom:4px}
 .comp-dot{display:inline-flex;align-items:center;gap:4px;font-size:10px;margin-top:3px}
