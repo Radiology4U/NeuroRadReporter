@@ -430,49 +430,43 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
     <nav id="sidebar">
       <div class="sb-brand">
         <div class="sb-logo">
-          <svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.45))">
+          <svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;filter:drop-shadow(0 2px 8px rgba(0,0,0,0.5))">
             <defs>
               <linearGradient id="ic-bg" x1="0" y1="0" x2="38" y2="38" gradientUnits="userSpaceOnUse">
-                <stop offset="0%" stop-color="#ff6b6b"/>
-                <stop offset="100%" stop-color="#9b1c1c"/>
+                <stop offset="0%" stop-color="#60a5fa"/>
+                <stop offset="100%" stop-color="#1e40af"/>
               </linearGradient>
-              <linearGradient id="ic-shine" x1="4" y1="3" x2="22" y2="16" gradientUnits="userSpaceOnUse">
-                <stop offset="0%" stop-color="#fff" stop-opacity=".32"/>
+              <linearGradient id="ic-shine" x1="4" y1="3" x2="22" y2="18" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="#fff" stop-opacity=".3"/>
                 <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
               </linearGradient>
-              <clipPath id="ic-clip"><rect width="38" height="38" rx="10"/></clipPath>
             </defs>
-
             <!-- tile -->
             <rect width="38" height="38" rx="10" fill="url(#ic-bg)"/>
-            <!-- gloss overlay -->
             <rect width="38" height="38" rx="10" fill="url(#ic-shine)"/>
-            <!-- subtle inner border for depth -->
-            <rect x=".75" y=".75" width="36.5" height="36.5" rx="9.4" stroke="rgba(255,255,255,0.18)" stroke-width="1.5" fill="none"/>
+            <rect x=".75" y=".75" width="36.5" height="36.5" rx="9.4" stroke="rgba(255,255,255,0.2)" stroke-width="1.2" fill="none"/>
 
-            <!-- MRI cross-section rings — clean, geometric, professional -->
-            <!-- outer ring -->
-            <circle cx="19" cy="18" r="10" stroke="rgba(255,255,255,0.9)" stroke-width="1.5" fill="none"/>
-            <!-- mid ring -->
-            <circle cx="19" cy="18" r="6.5" stroke="rgba(255,255,255,0.55)" stroke-width="1" fill="none"/>
-            <!-- inner fill — white matter core -->
-            <circle cx="19" cy="18" r="3.5" fill="rgba(255,255,255,0.22)"/>
-            <circle cx="19" cy="18" r="3.5" stroke="rgba(255,255,255,0.5)" stroke-width=".8" fill="none"/>
-
-            <!-- cross-hairs — MRI localization lines -->
-            <line x1="19" y1="7" x2="19" y2="11" stroke="rgba(255,255,255,0.7)" stroke-width="1.2" stroke-linecap="round"/>
-            <line x1="19" y1="25" x2="19" y2="29" stroke="rgba(255,255,255,0.7)" stroke-width="1.2" stroke-linecap="round"/>
-            <line x1="8" y1="18" x2="12" y2="18" stroke="rgba(255,255,255,0.7)" stroke-width="1.2" stroke-linecap="round"/>
-            <line x1="26" y1="18" x2="30" y2="18" stroke="rgba(255,255,255,0.7)" stroke-width="1.2" stroke-linecap="round"/>
-
-            <!-- center dot -->
-            <circle cx="19" cy="18" r="1.6" fill="#fff"/>
-
-            <!-- top-left specular highlight -->
-            <ellipse cx="13" cy="10" rx="5" ry="3" fill="rgba(255,255,255,0.15)" transform="rotate(-20 13 10)"/>
+            <!-- MRI SCANNER — top-down bore view -->
+            <!-- outer scanner housing ring -->
+            <circle cx="19" cy="20" r="12" fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.85)" stroke-width="1.8"/>
+            <!-- inner bore -->
+            <circle cx="19" cy="20" r="7.5" fill="rgba(15,30,80,0.55)" stroke="rgba(255,255,255,0.5)" stroke-width="1"/>
+            <!-- patient table — horizontal bar entering bore -->
+            <rect x="6" y="18.5" width="26" height="3" rx="1.5" fill="rgba(255,255,255,0.9)"/>
+            <!-- table support leg -->
+            <rect x="17.5" y="21.5" width="3" height="5" rx="1" fill="rgba(255,255,255,0.6)"/>
+            <!-- scanner top indicator lights — 3 dots -->
+            <circle cx="14" cy="10" r="1.2" fill="rgba(255,255,255,0.9)"/>
+            <circle cx="19" cy="9.2" r="1.2" fill="rgba(255,255,255,0.9)"/>
+            <circle cx="24" cy="10" r="1.2" fill="rgba(255,255,255,0.9)"/>
+            <!-- gradient field lines inside bore -->
+            <line x1="19" y1="14" x2="19" y2="17" stroke="rgba(255,255,255,0.4)" stroke-width=".8" stroke-linecap="round"/>
+            <line x1="19" y1="23" x2="19" y2="26" stroke="rgba(255,255,255,0.4)" stroke-width=".8" stroke-linecap="round"/>
+            <!-- specular top-left -->
+            <ellipse cx="12" cy="11" rx="5" ry="2.5" fill="rgba(255,255,255,0.12)" transform="rotate(-25 12 11)"/>
           </svg>
           <div style="background:rgba(0,0,0,0.35);border-radius:6px;padding:5px 8px;backdrop-filter:blur(4px)">
-            <div style="font-size:16px;font-weight:900;color:#fff;letter-spacing:-.4px;line-height:1.2;text-shadow:0 1px 8px rgba(0,0,0,0.8)">NeuroRad<span style="color:#fca5a5">Reporter</span></div>
+            <div style="line-height:1.2;text-shadow:0 1px 8px rgba(0,0,0,0.8)"><span style="font-size:16px;font-weight:900;color:#fff;letter-spacing:-.4px">NeuroRad</span><span style="font-size:16px;font-weight:900;color:#93c5fd;letter-spacing:-.4px">Reporter</span></div>
             <div style="font-size:8.5px;font-weight:600;color:rgba(255,255,255,0.85);text-transform:uppercase;letter-spacing:1px;margin-top:1px">Automatic Neuroradiology Reporting</div>
           </div>
         </div>
