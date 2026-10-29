@@ -910,6 +910,10 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
                 <div class="fg"><label>Max tokens</label>
                   <input class="inp" id="set-tokens" type="number" value="2048" min="256" max="4096"/>
                 </div>
+                <div class="fg"><label>Vision slices (1–1000)</label>
+                  <input class="inp" id="set-vision-slices" type="number" value="200" min="1" max="1000"/>
+                  <small style="color:var(--t3);font-size:11px">Slices tiled 5×5 per image · 40 tiles max · default 200</small>
+                </div>
                 <div class="fg"><label>Report language</label>
                   <select class="inp" id="set-lang">
                     <option value="English">English</option>
@@ -1049,6 +1053,7 @@ function loadSettings(){
   document.getElementById('set-lang').value=settings.lang;
   document.getElementById('set-inst').value=settings.inst;
   document.getElementById('set-rad').value=settings.rad;
+  document.getElementById('set-vision-slices').value=settings.visionSlices||200;
   document.getElementById('rag-pubmed-on').checked=settings.ragPubmed!==false;
   document.getElementById('rag-radio-on').checked=settings.ragRadiopaedia!==false;
 }
@@ -1058,6 +1063,7 @@ window.saveSettings=function(){
   settings.lang=document.getElementById('set-lang').value;
   settings.inst=document.getElementById('set-inst').value;
   settings.rad=document.getElementById('set-rad').value;
+  settings.visionSlices=Math.min(1000,Math.max(1,parseInt(document.getElementById('set-vision-slices').value)||200));
   try{localStorage.setItem('nrr_settings',JSON.stringify(settings));}catch{}
   toast('Settings saved','ok');audit('SYS','Settings saved');
 };
@@ -1664,38 +1670,63 @@ window.sendChat=async function(){
 
   if(ragParts.length)ragContext='## Related Literature\n'+ragParts.join('\n\n')+'\nConsider these references where clinically relevant.';
 
-  // Capture current DICOM canvas for vision analysis
+  // ── Tiled vision: pack multiple slices into grid images to maximise coverage ──
+  // Each tile is a COLS×ROWS grid of CELL_PX thumbnails with slice-number labels.
+  // 40 tiles × 25 slices/tile = 1000 slices per API call (Claude allows 100 images).
   let imageContent=[];
   const mainCv=document.getElementById('main-canvas');
   if(mainCv&&mainCv.width>0){
     try{
-      // Capture all slices, evenly sampled up to MAX_SLICES
       const vs2=viewSlices.length?viewSlices:slices;
-      const MAX_SLICES=20;
       const total=vs2.length;
-      // Always include current slice; fill rest evenly across series
+      // How many slices to sample (user setting, default 200, max 1000)
+      const MAX_SLICES=Math.min(1000,Math.max(1,parseInt(settings.visionSlices)||200));
+      // Grid geometry: 5×5 cells per tile, each cell 128 px square
+      const COLS=5, ROWS=5, CELL_PX=128;
+      const PER_TILE=COLS*ROWS; // 25
+      const MAX_TILES=40;       // 40×25 = 1000 cap
+      // Evenly sample up to MAX_SLICES indices, always including current slice
       let idxSet=new Set([curSlice]);
-      if(total<=MAX_SLICES){
-        for(let i=0;i<total;i++)idxSet.add(i);
+      const want=Math.min(MAX_SLICES, total, MAX_TILES*PER_TILE);
+      if(total<=want){
+        for(let i=0;i<total;i++) idxSet.add(i);
       } else {
-        for(let i=0;i<MAX_SLICES-1;i++)idxSet.add(Math.round(i*(total-1)/(MAX_SLICES-2)));
+        for(let i=0;i<want;i++) idxSet.add(Math.round(i*(total-1)/(want-1)));
       }
       const idxs=[...idxSet].sort((a,b)=>a-b);
-      for(const idx of idxs){
-        const tmpCv=document.createElement('canvas');
-        // Downscale to max 512px wide to save tokens while keeping diagnostic quality
-        drawCanvas(vs2[idx],tmpCv);
-        let outCv=tmpCv;
-        if(tmpCv.width>512){
-          outCv=document.createElement('canvas');
-          const scale=512/tmpCv.width;
-          outCv.width=512;outCv.height=Math.round(tmpCv.height*scale);
-          outCv.getContext('2d').drawImage(tmpCv,0,0,outCv.width,outCv.height);
-        }
-        const b64=outCv.toDataURL('image/jpeg',0.85).split(',')[1];
-        if(b64)imageContent.push({type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}});
+      // Helper: render one DICOM slice to a CELL_PX×CELL_PX canvas
+      function renderCell(sliceIdx){
+        const tmp=document.createElement('canvas');
+        drawCanvas(vs2[sliceIdx],tmp);
+        const cell=document.createElement('canvas');
+        cell.width=CELL_PX; cell.height=CELL_PX;
+        const cx=cell.getContext('2d');
+        // Fill black, then fit image (letterbox)
+        cx.fillStyle='#000'; cx.fillRect(0,0,CELL_PX,CELL_PX);
+        const scale=Math.min(CELL_PX/tmp.width, CELL_PX/tmp.height);
+        const dw=Math.round(tmp.width*scale), dh=Math.round(tmp.height*scale);
+        cx.drawImage(tmp,(CELL_PX-dw)/2,(CELL_PX-dh)/2,dw,dh);
+        // Slice-number label (top-left, small)
+        cx.font='bold 11px monospace';
+        cx.fillStyle='rgba(0,0,0,0.6)'; cx.fillRect(1,1,32,14);
+        cx.fillStyle='#ff0'; cx.fillText('#'+(sliceIdx+1),3,12);
+        return cell;
       }
-      console.log('Vision: sending '+imageContent.length+' of '+total+' slices to Claude');
+      // Build tiles
+      for(let t=0;t<Math.ceil(idxs.length/PER_TILE);t++){
+        const chunk=idxs.slice(t*PER_TILE,(t+1)*PER_TILE);
+        const tile=document.createElement('canvas');
+        tile.width=COLS*CELL_PX; tile.height=ROWS*CELL_PX;
+        const tx=tile.getContext('2d');
+        tx.fillStyle='#111'; tx.fillRect(0,0,tile.width,tile.height);
+        chunk.forEach((si,pos)=>{
+          const col=pos%COLS, row=Math.floor(pos/COLS);
+          tx.drawImage(renderCell(si), col*CELL_PX, row*CELL_PX);
+        });
+        const b64=tile.toDataURL('image/jpeg',0.80).split(',')[1];
+        if(b64) imageContent.push({type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}});
+      }
+      console.log('Vision: '+idxs.length+' of '+total+' slices → '+imageContent.length+' tile(s) sent to Claude');
     }catch(imgErr){console.warn('Image capture:',imgErr);}
   }
 
@@ -1705,7 +1736,7 @@ window.sendChat=async function(){
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({
         model:settings.model,max_tokens:settings.tokens,
-        system:`You are a board-certified neuroradiologist AI. ${ctx} You are receiving the full DICOM series (${imageContent.length} slices). Carefully analyse EVERY image — describe ALL visible abnormalities with their slice location. Do NOT assume normal findings. If lesions are present, describe size, signal, location, and suggest differential diagnosis. Reply in ${settings.lang}. Be concise and clinically precise.`+(ragContext?'\n\n'+ragContext:''),
+        system:`You are a board-certified neuroradiologist AI. ${ctx} You are receiving the DICOM series as tiled contact sheets — each image is a 5×5 grid of slices labelled #1, #2 … in yellow. There are ${imageContent.length} tile image(s) covering ${(()=>{const vs2=viewSlices.length?viewSlices:slices;const want=Math.min(1000,Math.max(1,parseInt(settings.visionSlices)||200),vs2.length);return want;})()}-of-${(viewSlices.length?viewSlices:slices).length} slices total. Carefully inspect EVERY cell in EVERY tile — reference slices by their yellow label number. Describe ALL visible abnormalities with their slice number(s). Do NOT assume normal findings. If lesions are present, describe size, signal, location, and suggest differential diagnosis. Reply in ${settings.lang}. Be concise and clinically precise.`+(ragContext?'\n\n'+ragContext:''),
         messages:[{role:'user',content:[...imageContent,{type:'text',text:prompt}]}]
       })
     });
