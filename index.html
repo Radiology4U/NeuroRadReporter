@@ -2627,6 +2627,7 @@ function parseDICOM(buf,fname){
 /* ── VIEWER ── */
 // viewSlices = current series being viewed (subset of slices[])
 let viewSlices=[];
+let selectedSeriesKeys=new Set(); // series checked for AI multi-series analysis
 
 function initViewer(){
   // Group all slices by series
@@ -2639,7 +2640,10 @@ function initViewer(){
   // Sort each series by instance number
   Object.values(seriesGroups).forEach(arr=>arr.sort((a,b)=>(a.instNum||0)-(b.instNum||0)));
 
-  // Pick first series
+  // Pre-select all series for AI analysis
+  selectedSeriesKeys=new Set(Object.keys(seriesGroups));
+
+  // Pick first series for viewer
   const firstKey=Object.keys(seriesGroups)[0];
   loadSeries(firstKey);
   buildSeriesSelector();
@@ -2649,6 +2653,7 @@ function loadSeries(key){
   curSeries=key;
   viewSlices=(seriesGroups[key]||[]);
   if(!viewSlices.length)return;
+  buildSeriesSelector(); // refresh chip highlights
   document.getElementById('viewer-empty').style.display='none';
   document.getElementById('main-canvas').style.display='block';
   const sl=document.getElementById('slice-slider');
@@ -2702,27 +2707,56 @@ function updateWindowPresets(isCT){
 
 function buildSeriesSelector(){
   const keys=Object.keys(seriesGroups);
-  if(keys.length<=1)return; // no selector needed for single series
-  let sel='<select id="series-sel" onchange="loadSeries(this.value)" style="font-size:12px;padding:3px 6px;border:1px solid var(--bdm);border-radius:4px;background:var(--s2);color:var(--tx);max-width:200px">';
-  keys.forEach(k=>{
-    const s=seriesGroups[k][0];
-    const label=`${s.modality||'?'} — ${s.seriesDesc||k.slice(-8)} (${seriesGroups[k].length} sl.)`;
-    sel+=`<option value="${esc(k)}">${esc(label)}</option>`;
-  });
-  sel+='</select>';
-  // Insert before viewer-controls
   const vc=document.querySelector('.viewer-controls');
-  let existing=document.getElementById('series-sel-row');
-  if(!existing){
-    existing=document.createElement('div');
-    existing.id='series-sel-row';
-    existing.style.cssText='display:flex;align-items:center;gap:8px;padding:4px 10px;font-size:12px;color:var(--t2);border-bottom:1px solid var(--bd)';
-    existing.innerHTML='<span>Series:</span>'+sel;
-    vc.parentNode.insertBefore(existing,vc);
-  } else {
-    existing.innerHTML='<span>Series:</span>'+sel;
+  let panel=document.getElementById('series-panel');
+  if(!panel){
+    panel=document.createElement('div');
+    panel.id='series-panel';
+    panel.style.cssText='padding:6px 10px;border-bottom:1px solid var(--bd);background:var(--s1);font-size:12px';
+    vc.parentNode.insertBefore(panel,vc);
   }
+
+  // Header row
+  let html='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
+  html+='<span style="color:var(--t2);font-weight:600;white-space:nowrap">Series:</span>';
+
+  keys.forEach((k,i)=>{
+    const s=seriesGroups[k][0];
+    const mod=s.modality||'?';
+    const desc=s.seriesDesc||k.slice(-8);
+    const n=seriesGroups[k].length;
+    const isViewing=k===curSeries;
+    const isChecked=selectedSeriesKeys.has(k);
+    // Each series = clickable chip (click → view) + checkbox (check → include in AI)
+    html+=`<div style="display:flex;align-items:center;gap:4px;background:${isViewing?'var(--acl)':'var(--s2)'};border:1.5px solid ${isViewing?'var(--ac)':'var(--bd)'};border-radius:6px;padding:3px 8px;cursor:pointer;user-select:none" onclick="loadSeries('${esc(k)}')" title="Click to view this series">`;
+    html+=`<input type="checkbox" id="sc-${i}" ${isChecked?'checked':''} onclick="event.stopPropagation();toggleSeriesAI('${esc(k)}',this.checked)" title="Include in AI analysis" style="cursor:pointer;accent-color:var(--ac)">`;
+    html+=`<span style="font-weight:600;color:var(--ac)">${esc(mod)}</span>`;
+    html+=`<span style="color:var(--t1)">${esc(desc)}</span>`;
+    html+=`<span style="color:var(--t3)">(${n})</span>`;
+    html+='</div>';
+  });
+
+  // AI badge showing how many series are selected
+  html+=`<span id="ai-series-badge" style="margin-left:auto;font-size:11px;color:var(--gn);white-space:nowrap">🧠 AI: ${selectedSeriesKeys.size} series</span>`;
+  html+='</div>';
+
+  // If >1 series: show hint
+  if(keys.length>1){
+    html+='<div style="font-size:11px;color:var(--t3);margin-top:3px">Click chip to view · ☑ checkbox = include in AI report · e.g. check DWI + ADC + FLAIR for stroke dating</div>';
+  }
+
+  panel.innerHTML=html;
 }
+
+window.toggleSeriesAI=function(key, checked){
+  if(checked) selectedSeriesKeys.add(key);
+  else selectedSeriesKeys.delete(key);
+  // Update badge
+  const badge=document.getElementById('ai-series-badge');
+  if(badge) badge.textContent='🧠 AI: '+selectedSeriesKeys.size+' series';
+  // Warn if none selected
+  if(selectedSeriesKeys.size===0) toast('Select at least one series for AI analysis','warn');
+};
 
 function autoWinSeries(e){
   if(!e||!e.pixOff)return;
@@ -2876,12 +2910,36 @@ window.sendChat=async function(){
   document.getElementById('chat-send').disabled=true;
   audit('AI','Prompt: '+prompt.slice(0,80));
 
-  const vs=viewSlices.length?viewSlices:slices;
+  // Build the slice set for AI: merge all checked series (multi-series analysis)
+  let aiSeriesKeys=[...selectedSeriesKeys].filter(k=>seriesGroups[k]&&seriesGroups[k].length);
+  if(!aiSeriesKeys.length) aiSeriesKeys=curSeries?[curSeries]:Object.keys(seriesGroups).slice(0,1);
+  // Collect slices in series order; interleave evenly so tiling shows each series
+  const vs=(()=>{
+    if(aiSeriesKeys.length<=1) return viewSlices.length?viewSlices:slices;
+    // Zip: take slices round-robin across series so tiles show series side-by-side
+    const pools=aiSeriesKeys.map(k=>seriesGroups[k]||[]);
+    const maxLen=Math.max(...pools.map(p=>p.length));
+    const merged=[];
+    for(let i=0;i<maxLen;i++) pools.forEach(p=>{if(i<p.length)merged.push(p[i]);});
+    return merged;
+  })();
+
+  // Build context string describing all selected series
   const isRasterStudy=vs.length&&vs[0].raster;
-  const ctx=vs.length?(isRasterStudy
-    ?`Image study: ${vs.length} raster image(s) (${vs[0].seriesDesc||'unknown filename'}). No DICOM metadata — analyse visual content only.`
-    :`Study ID: ${anonPID(vs[0].patientName)}, modality ${vs[0].modality||'unknown'}, series "${vs[0].seriesDesc||''}", ${vs.length} images. Patient year of birth: ${anonDOB(vs[0].patientDOB)}. Study date: ${anonDate(vs[0].studyDate)}.`)
-    :'No images loaded.';
+  const ctx=(()=>{
+    if(!vs.length) return 'No images loaded.';
+    if(isRasterStudy) return `Image study: ${vs.length} raster image(s). No DICOM metadata — analyse visual content only.`;
+    if(aiSeriesKeys.length>1){
+      const seriesDesc=aiSeriesKeys.map(k=>{
+        const s=(seriesGroups[k]||[])[0]||{};
+        return `${s.modality||'?'} "${s.seriesDesc||k.slice(-6)}" (${(seriesGroups[k]||[]).length} sl.)`;
+      }).join(' | ');
+      const s0=vs[0];
+      return `Study ID: ${anonPID(s0.patientName)}. Multi-series analysis — ${aiSeriesKeys.length} series: ${seriesDesc}. Total images: ${vs.length}. Patient year of birth: ${anonDOB(s0.patientDOB)}. Study date: ${anonDate(s0.studyDate)}.`;
+    }
+    const s0=vs[0];
+    return `Study ID: ${anonPID(s0.patientName)}, modality ${s0.modality||'unknown'}, series "${s0.seriesDesc||''}", ${vs.length} images. Patient year of birth: ${anonDOB(s0.patientDOB)}. Study date: ${anonDate(s0.studyDate)}.`;
+  })();
 
   // RAG: fetch similar cases from enabled sources
   let ragContext='';
@@ -2930,7 +2988,7 @@ window.sendChat=async function(){
   const mainCv=document.getElementById('main-canvas');
   if(mainCv&&mainCv.width>0){
     try{
-      const vs2=viewSlices.length?viewSlices:slices;
+      const vs2=vs.length?vs:(viewSlices.length?viewSlices:slices);
       const total=vs2.length;
       // How many slices to sample (user setting, default 200, max 1000)
       const MAX_SLICES=Math.min(1000,Math.max(1,parseInt(settings.visionSlices)||200));
@@ -2989,7 +3047,7 @@ window.sendChat=async function(){
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({
         model:settings.model,max_tokens:settings.tokens,
-        system:`You are a board-certified neuroradiologist AI. ${ctx} You are receiving the DICOM series as tiled contact sheets — each image is a 5×5 grid of slices labelled #1, #2 … in yellow. There are ${imageContent.length} tile image(s) covering ${(()=>{const vs2=viewSlices.length?viewSlices:slices;const want=Math.min(1000,Math.max(1,parseInt(settings.visionSlices)||200),vs2.length);return want;})()}-of-${(viewSlices.length?viewSlices:slices).length} slices total. Carefully inspect EVERY cell in EVERY tile — reference slices by their yellow label number. Describe ALL visible abnormalities with their slice number(s). Do NOT assume normal findings. If lesions are present, describe size, signal, location, and suggest differential diagnosis. Reply in ${settings.lang}. Be concise and clinically precise.`+(ragContext?'\n\n'+ragContext:''),
+        system:`You are a board-certified neuroradiologist AI. ${ctx} You are receiving the DICOM series as tiled contact sheets — each image is a 5×5 grid of slices labelled #1, #2 … in yellow. Slices from multiple series are interleaved (round-robin) so adjacent cells may come from different sequences. There are ${imageContent.length} tile image(s) covering ${vs.length} slices total.${aiSeriesKeys.length>1?` MULTI-SERIES ANALYSIS: correlate findings ACROSS all ${aiSeriesKeys.length} series. For stroke dating: DWI restriction + ADC dark = acute (<24h); DWI bright + ADC normal = T2 shine-through; FLAIR bright = >4–6h. Note any DWI/ADC/FLAIR mismatch.`:''} Carefully inspect EVERY cell in EVERY tile — reference slices by their yellow label number. Describe ALL visible abnormalities with their slice number(s). Do NOT assume normal findings. Reply in ${settings.lang}. Be concise and clinically precise.`+(ragContext?'\n\n'+ragContext:''),
         messages:[{role:'user',content:[...imageContent,{type:'text',text:prompt}]}]
       })
     });
