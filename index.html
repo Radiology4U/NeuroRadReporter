@@ -1500,9 +1500,7 @@ window.sendChat=async function(){
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({
         model:settings.model,max_tokens:settings.tokens,
-        system:`You are a board-certified neuroradiologist AI. ${ctx} Reply in ${settings.lang}. Be concise and clinically precise.${ragContext?'
-
-'+ragContext:''}`,
+        system:`You are a board-certified neuroradiologist AI. ${ctx} Reply in ${settings.lang}. Be concise and clinically precise.`+(ragContext?'\n\n'+ragContext:''),
         messages:[{role:'user',content:prompt}]
       })
     });
