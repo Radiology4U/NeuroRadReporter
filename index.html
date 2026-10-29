@@ -1018,115 +1018,124 @@ function sha256short(s){
 }
 
 /* ── DICOM PARSER ── */
+// Known explicit VR types that use 4-byte length (2 reserved + 4 length)
+const VR4={OB:1,OD:1,OF:1,OL:1,OW:1,SQ:1,UC:1,UN:1,UR:1,UT:1};
+const VR_SET=new Set(['AE','AS','AT','CS','DA','DS','DT','FL','FD','IS','LO','LT','OB','OD','OF','OL','OW','PN','SH','SL','SQ','SS','ST','TM','UC','UI','UL','UN','UR','US','UT']);
+
 function parseDICOM(buf,fname){
+  if(buf.byteLength<256) throw new Error('too small');
   const dv=new DataView(buf);
   const bytes=new Uint8Array(buf);
-  // Detect transfer syntax: explicit vs implicit VR
-  // DICOM preamble is 128 bytes + "DICM" magic at 128
-  const hasMagic=buf.byteLength>132&&bytes[128]===68&&bytes[129]===73&&bytes[130]===67&&bytes[131]===77;
-  let implicit=false; // will detect below
 
   function str(o,len){
-    if(o<0||o+len>buf.byteLength)return '';
-    try{return new TextDecoder('latin1').decode(bytes.slice(o,o+len)).replace(/[\0]+$/g,'').trim();}catch{return '';}
+    if(o<0||len<=0||o+len>buf.byteLength) return '';
+    try{return new TextDecoder('latin1').decode(bytes.subarray(o,o+Math.min(len,512))).replace(/[\0\s]+$/g,'').trim();}catch{return '';}
   }
 
-  // Scan tags — handles both explicit VR and implicit VR transfer syntaxes
-  // Returns {off, len} of value field for given group/element
-  function findTag(targetG,targetE){
-    const start=hasMagic?132:0;
-    let i=start;
-    while(i<buf.byteLength-8){
-      try{
-        const g=dv.getUint16(i,true);
-        const e=dv.getUint16(i+2,true);
-        // Try explicit VR first
-        const vrStr=str(i+4,2);
-        const isExplicit=/^[A-Z][A-Z]$/.test(vrStr) &&
-          ['AE','AS','AT','CS','DA','DS','DT','FL','FD','IS','LO','LT','OB','OD','OF','OW','PN','SH','SL','SQ','SS','ST','TM','UC','UI','UL','UN','UR','US','UT'].includes(vrStr);
+  // ── Single-pass sequential tag scan ──────────────────────────────────────
+  // Parses ALL tags in one forward pass; handles explicit VR (little-endian)
+  // with graceful fallback for implicit VR and corrupt length fields.
+  const tags={};   // (group<<16|elem) -> {off, len}
+  let pixOff=0, pixLen=0;
 
-        let len,off,step;
-        if(isExplicit){
-          if(['OB','OD','OF','OL','OW','SQ','UC','UN','UR','UT'].includes(vrStr)){
-            // 4-byte reserved + 4-byte length
-            len=dv.getUint32(i+8,true);off=i+12;step=12+len;
-          } else {
-            // 2-byte length
-            len=dv.getUint16(i+6,true);off=i+8;step=8+len;
-          }
-        } else {
-          // Implicit VR: 4-byte length
-          len=dv.getUint32(i+4,true);off=i+8;step=8+len;
-          implicit=true;
-        }
+  // DICOM magic "DICM" at offset 128 marks Part-10 file with 128-byte preamble
+  const hasMagic=buf.byteLength>132
+    &&bytes[128]===0x44&&bytes[129]===0x49&&bytes[130]===0x43&&bytes[131]===0x4D;
+  let i=hasMagic?132:0;
 
-        if(g===targetG&&e===targetE) return {off,len};
+  while(i+8<=buf.byteLength){
+    let g,e;
+    try{g=dv.getUint16(i,true);e=dv.getUint16(i+2,true);}catch{break;}
 
-        // Pixel data tag — stop here regardless
-        if(g===0x7FE0&&e===0x0010) return null;
-
-        // Advance — cap step to avoid infinite loop
-        const advance=Math.max(4, step&~1); // keep word-aligned
-        if(advance<=0||advance>buf.byteLength)break;
-        i+=advance;
-      }catch{i+=2;}
-    }
-    return null;
-  }
-
-  function ts(g,e){const t=findTag(g,e);return t?str(t.off,t.len):'';}
-  function tn(g,e){const v=ts(g,e);return parseFloat(v)||0;}
-
-  const modality=(ts(0x08,0x60)||'').toUpperCase();
-  const isCT=modality==='CT';
-  const isPT=modality==='PT';
-
-  const m={
-    patientName:ts(0x10,0x10)||'ANON',
-    patientDOB:ts(0x10,0x30),
-    studyDate:ts(0x08,0x20),
-    modality,
-    seriesDesc:ts(0x08,0x103E)||ts(0x08,0x1030)||fname,
-    institution:ts(0x08,0x80),
-    seriesUID:ts(0x20,0x0E)||fname.replace(/[^a-z0-9]/gi,''),
-    seriesNum:tn(0x20,0x11),
-    instNum:tn(0x20,0x13),
-    rows:tn(0x28,0x10)||512,
-    cols:tn(0x28,0x11)||512,
-    bitsAlloc:tn(0x28,0x100)||16,
-    bitsStored:tn(0x28,0x101)||16,
-    pixelRep:tn(0x28,0x103), // 0=unsigned, 1=signed (CT is signed)
-    ri:parseFloat(ts(0x28,0x1052))||0,  // rescale intercept
-    rs:parseFloat(ts(0x28,0x1053))||1,  // rescale slope
-    wc:parseFloat(ts(0x28,0x1050))||(isCT?40:128),
-    ww:parseFloat(ts(0x28,0x1051))||(isCT?80:256),
-    fname,buf,isCT,isPT
-  };
-
-  // Find pixel data — scan for 7FE0,0010
-  const searchEnd=Math.min(buf.byteLength-12,4000000);
-  for(let i=hasMagic?132:0;i<searchEnd;i+=2){
-    try{
-      if(dv.getUint16(i,true)===0x7FE0&&dv.getUint16(i+2,true)===0x0010){
-        const vr2=str(i+4,2);
-        if(vr2==='OB'||vr2==='OW'){
-          m.pixOff=i+12;m.pixLen=dv.getUint32(i+8,true);
-        } else if(vr2==='OB'||/^[ -~]{2}$/.test(vr2)){
-          // explicit short form
-          m.pixOff=i+8;m.pixLen=dv.getUint32(i+4,true);
-        } else {
-          // implicit — 4 byte length at offset +4
-          m.pixOff=i+8;m.pixLen=dv.getUint32(i+4,true);
-        }
-        // Sanity: pixOff+pixLen should be within file
-        if(m.pixOff&&m.pixOff+m.pixLen>buf.byteLength) m.pixLen=buf.byteLength-m.pixOff;
-        break;
+    // ── Pixel data tag 7FE0,0010 ────────────────────────────────────────────
+    if(g===0x7FE0&&e===0x0010){
+      const vr2=str(i+4,2);
+      if(vr2==='OB'||vr2==='OW'){
+        // Explicit long form: tag(4)+VR(2)+reserved(2)+len(4) = 12 bytes header
+        pixLen=dv.getUint32(i+8,true);
+        pixOff=i+12;
+      } else {
+        // Implicit form: tag(4)+len(4) = 8 bytes header
+        pixLen=dv.getUint32(i+4,true);
+        pixOff=i+8;
       }
-    }catch{i+=2;}
+      if(pixLen===0xFFFFFFFF||pixOff+pixLen>buf.byteLength) pixLen=buf.byteLength-pixOff;
+      break; // pixel data is always last
+    }
+
+    // ── Normal tag ──────────────────────────────────────────────────────────
+    const vr=str(i+4,2);
+    const isExplicit=VR_SET.has(vr);
+    let valOff,valLen;
+
+    if(isExplicit){
+      if(VR4[vr]){
+        // Long form: VR(2)+reserved(2)+length(4) → value at i+12
+        if(i+12>buf.byteLength){i+=4;continue;}
+        valLen=dv.getUint32(i+8,true);
+        valOff=i+12;
+      } else {
+        // Short form: VR(2)+length(2) → value at i+8
+        if(i+8>buf.byteLength){i+=4;continue;}
+        valLen=dv.getUint16(i+6,true);
+        valOff=i+8;
+      }
+    } else {
+      // Implicit VR: length(4) at i+4 → value at i+8
+      valLen=dv.getUint32(i+4,true);
+      valOff=i+8;
+    }
+
+    // Sanity check: skip corrupted/huge lengths
+    if(valLen===0xFFFFFFFF||valLen>buf.byteLength){i+=4;continue;}
+    if(valOff+valLen>buf.byteLength) valLen=buf.byteLength-valOff;
+
+    const key=(g<<16|e)>>>0;
+    tags[key]={off:valOff,len:valLen};
+
+    i=valOff+valLen;
+    if(i&1)i++; // word-align
   }
 
-  return m;
+  // ── Accessors ────────────────────────────────────────────────────────────
+  function tv(g,e){const t=tags[(g<<16|e)>>>0];return t?str(t.off,t.len):'';}
+  function tn(g,e){const v=tv(g,e);const n=parseFloat(v);return isFinite(n)?n:0;}
+  function tu(g,e){  // read raw Uint16 (for US VR numeric tags like rows/cols)
+    const t=tags[(g<<16|e)>>>0];
+    if(!t||t.len<2)return 0;
+    try{return dv.getUint16(t.off,true);}catch{return 0;}
+  }
+  function firstNum(s){const n=parseFloat((s||'').split('\\\\')[0]);return isFinite(n)?n:null;}
+
+  const modality=(tv(0x08,0x60)||'').toUpperCase();
+  const isCT=(modality==='CT');
+
+  const rows=tu(0x28,0x10)||tn(0x28,0x10)||0;
+  const cols=tu(0x28,0x11)||tn(0x28,0x11)||0;
+  const bitsAlloc=tu(0x28,0x100)||tn(0x28,0x100)||16;
+  const bitsStored=tu(0x28,0x101)||tn(0x28,0x101)||bitsAlloc;
+  const pixelRep=tu(0x28,0x103); // 0=unsigned, 1=signed
+
+  return {
+    patientName: tv(0x10,0x10)||'ANON',
+    patientDOB:  tv(0x10,0x30),
+    studyDate:   tv(0x08,0x20),
+    modality,
+    seriesDesc:  tv(0x08,0x103E)||tv(0x08,0x1030)||fname,
+    institution: tv(0x08,0x80),
+    seriesUID:   tv(0x20,0x0E)||fname,
+    seriesNum:   tn(0x20,0x11),
+    instNum:     tn(0x20,0x13),
+    rows, cols, bitsAlloc, bitsStored, pixelRep,
+    ri: parseFloat(tv(0x28,0x1052))||0,   // rescale intercept
+    rs: parseFloat(tv(0x28,0x1053))||1,   // rescale slope
+    wcDicom: firstNum(tv(0x28,0x1050)),   // window center from DICOM
+    wwDicom: firstNum(tv(0x28,0x1051)),   // window width from DICOM
+    pixOff, pixLen,
+    fname, buf, isCT
+  };
 }
+
 
 /* ── VIEWER ── */
 // viewSlices = current series being viewed (subset of slices[])
@@ -1165,10 +1174,12 @@ function loadSeries(key){
 
   if(isCT){
     // CT: use DICOM window values or brain defaults
-    wc=s0.wc||40;ww=s0.ww||80;
+    wc=s0.wcDicom||40; ww=s0.wwDicom||80;
+    // Ensure positive ww
+    if(!(ww>0)) ww=80;
   } else {
-    // MRI/other: auto-window from pixel data
-    wc=null;ww=null; // trigger autoWin
+    // MRI: auto-window from pixel data of first slice
+    wc=128; ww=256; // safe fallback before autoWin
     autoWinSeries(s0);
   }
   curSlice=0;
@@ -1240,8 +1251,12 @@ function autoWinSeries(e){
     const hu=raw*e.rs+e.ri;
     if(hu<mn)mn=hu;if(hu>mx)mx=hu;
   }
-  if(mn<mx){wc=Math.round((mn+mx)/2);ww=Math.round(mx-mn);}
-  else{wc=128;ww=256;}
+  if(isFinite(mn)&&isFinite(mx)&&mn<mx){
+    wc=Math.round((mn+mx)/2);
+    ww=Math.round(mx-mn)||256;
+  } else {
+    wc=128;ww=256; // fallback
+  }
 }
 
 window.renderSlice=function(idx){
@@ -1269,7 +1284,8 @@ function drawCanvas(e,cv){
   // CT is always signed 16-bit; MRI unsigned unless pixelRep=1
   const signed=e.pixelRep===1||e.isCT;
   const b2=e.bitsAlloc===16||e.bitsStored>8;
-  const lo=wc-ww/2,hi=wc+ww/2;
+  const _wc=isFinite(wc)?wc:128, _ww=isFinite(ww)&&ww>0?ww:256;
+  const lo=_wc-_ww/2,hi=_wc+_ww/2;
   const range=hi-lo||1;
   const n=e.rows*e.cols;
   for(let i=0;i<n;i++){
