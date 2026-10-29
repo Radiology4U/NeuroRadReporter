@@ -2414,22 +2414,32 @@ window.loadFiles=function(files){
   const arr=Array.from(files).slice(0,1000).sort((a,b)=>a.name.localeCompare(b.name));
   document.getElementById('st-total').textContent=arr.length;
 
-  const rasterExts=new Set(['png','jpg','jpeg','tif','tiff']);
+  const rasterExts=new Set(['png','jpg','jpeg','tif','tiff','bmp','gif','webp','svg']);
+  const rasterMimes=new Set(['image/png','image/jpeg','image/tiff','image/bmp','image/gif','image/webp','image/svg+xml']);
   function isDICOM(f){
     const ext=f.name.split('.').pop().toLowerCase();
-    return ext==='dcm'||f.type==='application/dicom'||(!rasterExts.has(ext)&&f.type==='');
+    // Explicit raster extension or raster MIME → not DICOM
+    if(rasterExts.has(ext)||rasterMimes.has(f.type)) return false;
+    // Explicit DICOM extension or MIME → DICOM
+    if(ext==='dcm'||f.type==='application/dicom') return true;
+    // Extensionless files or unknown extensions (IM-0001, 0001, etc.) → treat as DICOM
+    // regardless of f.type (browser may set 'application/octet-stream')
+    return true;
   }
 
   // We collect results asynchronously; raster files may fire multiple slices (multi-page TIFF)
   let pending=arr.length;
   function onSlice(sl){ slices.push(sl); }
   function finish(){
-    slices.sort((a,b)=>(a.inst||0)-(b.inst||0));
+    slices.sort((a,b)=>(a.seriesNum||0)-(b.seriesNum||0)||(a.instNum||a.inst||0)-(b.instNum||b.inst||0));
     updateStats();
+    document.getElementById('st-err').textContent=errs;
     buildSeriesTable();
     if(slices.length){initViewer();}
     audit('ANON',`Loaded ${slices.length} images, ${errs} errors`);
-    toast(`Loaded ${slices.length} image(s)`,'ok');
+    if(errs>0&&slices.length===0) toast(`Failed to load ${errs} file(s) — check format`,'err');
+    else if(errs>0) toast(`Loaded ${slices.length} image(s) — ${errs} file(s) skipped`,'warn');
+    else toast(`Loaded ${slices.length} image(s) across ${new Set(slices.map(s=>s.seriesUID)).size} series`,'ok');
   }
 
   arr.forEach(f=>{
@@ -2454,7 +2464,7 @@ function updateStats(){
   const series=new Set(slices.map(s=>s.seriesUID||'unknown'));
   document.getElementById('st-series').textContent=series.size;
   document.getElementById('st-anon').textContent=slices.length;
-  document.getElementById('st-err').textContent=0;
+  // st-err is set by finish() after all files are counted
   document.getElementById('badge-anon').textContent=slices.length;
   document.getElementById('badge-ai').textContent=slices.length;
 }
@@ -2610,7 +2620,7 @@ function parseDICOM(buf,fname){
     modality,
     seriesDesc:  tv(0x08,0x103E)||tv(0x08,0x1030)||fname,
     institution: tv(0x08,0x80),
-    seriesUID:   tv(0x20,0x0E)||fname,
+    seriesUID:   tv(0x20,0x0E)||(modality+'_series'+(tn(0x20,0x11)||'0')),
     seriesNum:   tn(0x20,0x11),
     instNum:     tn(0x20,0x13),
     rows, cols, bitsAlloc, bitsStored, pixelRep,
