@@ -1108,6 +1108,26 @@ function sha256short(s){
   let h=0;for(let i=0;i<s.length;i++){h=(Math.imul(31,h)+s.charCodeAt(i))|0;}
   return (h>>>0).toString(16).padStart(8,'0')+'…';
 }
+// Anonymize a patient identifier to a stable pseudonym (e.g. "Patient-3A7F")
+// Uses the same hash as sha256short so the ID is consistent within a session.
+function anonPID(raw){
+  if(!raw||raw==='—'||raw==='ANON') return 'ANON';
+  let h=0;for(let i=0;i<raw.length;i++){h=(Math.imul(31,h)+raw.charCodeAt(i))|0;}
+  return 'Patient-'+((h>>>0).toString(16).toUpperCase().padStart(4,'0').slice(0,4));
+}
+// Anonymize a date: keep year only (e.g. "1968-xx-xx") to prevent re-identification
+function anonDOB(raw){
+  if(!raw) return 'unknown';
+  const m=raw.match(/(\d{4})/);
+  return m ? m[1]+'-xx-xx' : 'unknown';
+}
+// Anonymize a study date: keep year+month only (e.g. "2026-04-xx")
+function anonDate(raw){
+  if(!raw) return 'unknown';
+  // DICOM format YYYYMMDD or ISO YYYY-MM-DD
+  const m=raw.match(/(\d{4})[^\d]?(\d{2})/);
+  return m ? m[1]+'-'+m[2]+'-xx' : 'unknown';
+}
 
 /* ── DICOM PARSER ── */
 // Known explicit VR types that use 4-byte length (2 reserved + 4 length)
@@ -1361,8 +1381,8 @@ window.renderSlice=function(idx){
   const e=viewSlices[idx];
   const cv=document.getElementById('main-canvas');
   drawCanvas(e,cv);
-  document.getElementById('ov-tl').textContent=e.patientName||'';
-  document.getElementById('ov-tr').textContent=(e.modality||'')+' '+(e.studyDate||'');
+  document.getElementById('ov-tl').textContent=anonPID(e.patientName);
+  document.getElementById('ov-tr').textContent=(e.modality||'')+' '+anonDate(e.studyDate||'');
   document.getElementById('ov-bl').textContent=e.seriesDesc||'';
   document.getElementById('ov-br').textContent=`WC:${Math.round(wc)} WW:${Math.round(ww)}`;
 };
@@ -1475,7 +1495,7 @@ window.sendChat=async function(){
   audit('AI','Prompt: '+prompt.slice(0,80));
 
   const vs=viewSlices.length?viewSlices:slices;
-  const ctx=vs.length?`Study: ${vs[0].patientName||'ANON'}, modality ${vs[0].modality||'unknown'}, series "${vs[0].seriesDesc||''}", ${vs.length} images. Patient DOB: ${vs[0].patientDOB||'unknown'}. Study date: ${vs[0].studyDate||'unknown'}.`:'No DICOM loaded.';
+  const ctx=vs.length?`Study ID: ${anonPID(vs[0].patientName)}, modality ${vs[0].modality||'unknown'}, series "${vs[0].seriesDesc||''}", ${vs.length} images. Patient year of birth: ${anonDOB(vs[0].patientDOB)}. Study date: ${anonDate(vs[0].studyDate)}.`:'No DICOM loaded.';
 
   // RAG: fetch similar cases live from PubMed (free, no server needed)
   let ragContext='';
@@ -1595,7 +1615,7 @@ window.exportHL7=function(){
   const res={resourceType:'DiagnosticReport',id:uid,status:'final',
     category:[{coding:[{system:'http://loinc.org',code:'RAD'}]}],
     code:{coding:[{system:'http://loinc.org',code:'18748-4',display:'Diagnostic imaging study'}]},
-    subject:{display:slices[0]?.patientName||'ANON'},
+    subject:{display:anonPID(slices[0]?.patientName)},
     effectiveDateTime:new Date().toISOString().slice(0,10),
     issued:new Date().toISOString(),
     conclusion:document.getElementById('sf-imp').value};
@@ -1773,10 +1793,10 @@ window.searchPACS=async function(){
 window.importStudy=function(i){
   const s=pacsStudies[i];
   if(!s)return;
-  document.getElementById('sf-ind').value='Patient: '+(s.PatientMainDicomTags?.PatientName||'—')+', Date: '+(s.MainDicomTags?.StudyDate||'—');
+  document.getElementById('sf-ind').value='Patient ID: '+anonPID(s.PatientMainDicomTags?.PatientName)+', Date: '+anonDate(s.MainDicomTags?.StudyDate||'');
   nav('ai',document.querySelectorAll('.sb-item')[1]);
   toast('Study imported to report','ok');
-  audit('PACS','Study imported: '+(s.PatientMainDicomTags?.PatientName||'—'));
+  audit('PACS','Study imported: '+anonPID(s.PatientMainDicomTags?.PatientName));
 };
 window.pushReport=function(){
   const url=document.getElementById('pacs-url').value;
