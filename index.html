@@ -957,7 +957,7 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
               </div>
               <div id="rag-pubmed-status" style="font-size:11px;color:var(--t3);margin:2px 0 10px 42px"></div>
 
-              <!-- Europe PMC / Radiopaedia-indexed source -->
+              <!-- Radiopaedia curated cases -->
               <div class="rag-source-row">
                 <div style="display:flex;align-items:center;gap:8px;flex:1">
                   <label class="rag-toggle-wrap">
@@ -965,8 +965,8 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
                     <span class="rag-toggle-track"></span>
                   </label>
                   <div>
-                    <div style="font-size:13px;font-weight:600">Europe PMC — Radiology Cases</div>
-                    <div style="font-size:11px;color:var(--t3)">Open-access radiology case reports incl. Radiopaedia-indexed</div>
+                    <div style="font-size:13px;font-weight:600">Radiopaedia</div>
+                    <div style="font-size:11px;color:var(--t3)">Curated cases matched to diagnosis keywords</div>
                   </div>
                 </div>
                 <button class="btn sm" onclick="testRadiopaedia()">Test</button>
@@ -1075,14 +1075,45 @@ window.testPubmed=async function(){
     else{st.style.color='var(--rd)';st.textContent='✗ Error '+r.status;}
   }catch(e){st.style.color='var(--rd)';st.textContent='✗ '+e.message;}
 };
-window.testRadiopaedia=async function(){
+// Curated Radiopaedia cases indexed by diagnosis keyword
+const RADIOPAEDIA_CASES=[
+  {keys:['glioblastoma','gbm','glioma','high grade'],title:'Glioblastoma (GBM)',url:'https://radiopaedia.org/cases/glioblastoma-87',dx:'High-grade astrocytic neoplasm with ring enhancement and central necrosis'},
+  {keys:['low grade glioma','grade ii','oligodendroglioma'],title:'Low-grade glioma',url:'https://radiopaedia.org/cases/low-grade-glioma-1',dx:'Diffuse T2/FLAIR hyperintense infiltrative lesion without enhancement'},
+  {keys:['meningioma'],title:'Meningioma',url:'https://radiopaedia.org/cases/meningioma-42',dx:'Extra-axial dural-based enhancing mass with dural tail'},
+  {keys:['metastasis','metastases','brain mets'],title:'Brain metastases',url:'https://radiopaedia.org/cases/brain-metastases-ring-enhancing',dx:'Multiple ring-enhancing lesions at grey-white junction'},
+  {keys:['stroke','infarct','ischaemia','ischemia','mca','dwi restriction'],title:'Acute ischaemic stroke',url:'https://radiopaedia.org/cases/acute-mca-territory-infarction-4',dx:'DWI restriction with ADC drop in arterial territory'},
+  {keys:['haemorrhage','hemorrhage','bleed','hematoma','hematoma'],title:'Intracerebral haemorrhage',url:'https://radiopaedia.org/cases/hypertensive-intracerebral-haemorrhage-1',dx:'Hyperdense parenchymal collection with surrounding oedema'},
+  {keys:['subdural','sdh'],title:'Subdural haematoma',url:'https://radiopaedia.org/cases/subdural-haematoma-acute-6',dx:'Crescent-shaped extra-axial collection along inner table'},
+  {keys:['epidural','extradural','edh'],title:'Epidural haematoma',url:'https://radiopaedia.org/cases/extradural-haematoma-5',dx:'Biconvex hyperdense extra-axial collection, does not cross sutures'},
+  {keys:['multiple sclerosis','ms lesion','demyelination','dawson'],title:'Multiple sclerosis',url:'https://radiopaedia.org/cases/multiple-sclerosis-53',dx:'Periventricular and juxtacortical T2 hyperintense ovoid lesions'},
+  {keys:['abscess','cerebral abscess','ring enhancing'],title:'Cerebral abscess',url:'https://radiopaedia.org/cases/cerebral-abscess-ring-enhancing-1',dx:'Ring-enhancing lesion with DWI restriction centrally (pus)'},
+  {keys:['aneurysm','subarachnoid','sah'],title:'Subarachnoid haemorrhage / aneurysm',url:'https://radiopaedia.org/cases/subarachnoid-haemorrhage-3',dx:'Hyperdense CSF in basal cisterns, evaluate for aneurysm on CTA'},
+  {keys:['avm','arteriovenous malformation'],title:'Arteriovenous malformation',url:'https://radiopaedia.org/cases/arteriovenous-malformation-brain-3',dx:'Tangle of vessels with flow voids, no normal intervening brain'},
+  {keys:['cavernoma','cavernous malformation','cavernous hemangioma'],title:'Cavernous malformation',url:'https://radiopaedia.org/cases/cavernoma-1',dx:'Popcorn lesion with haemosiderin rim on T2*'},
+  {keys:['hydrocephalus','ventricle enlargement','ventriculomegaly'],title:'Hydrocephalus',url:'https://radiopaedia.org/cases/hydrocephalus-communicating-3',dx:'Symmetric ventricular enlargement disproportionate to sulci'},
+  {keys:['encephalitis','herpes','hsv'],title:'Viral encephalitis (HSV)',url:'https://radiopaedia.org/cases/herpes-simplex-encephalitis-11',dx:'T2/FLAIR signal in medial temporal lobes and cingulate gyrus'},
+  {keys:['leukoencephalopathy','white matter','pml'],title:'Leukoencephalopathy / white matter disease',url:'https://radiopaedia.org/cases/progressive-multifocal-leukoencephalopathy-2',dx:'Asymmetric white matter T2 hyperintensity without mass effect'},
+  {keys:['pituitary','sella','microadenoma','macroadenoma'],title:'Pituitary adenoma',url:'https://radiopaedia.org/cases/pituitary-macroadenoma-22',dx:'Sellar/suprasellar mass with upward convexity and stalk deviation'},
+  {keys:['acoustic neuroma','vestibular schwannoma','cranial nerve'],title:'Vestibular schwannoma',url:'https://radiopaedia.org/cases/vestibular-schwannoma-15',dx:'CPA-IAC enhancing mass widening internal auditory canal'},
+  {keys:['lymphoma','pcnsl','primary cns'],title:'Primary CNS lymphoma',url:'https://radiopaedia.org/cases/primary-cns-lymphoma-15',dx:'Periventricular homogeneously enhancing mass with restricted diffusion'},
+  {keys:['normal','no abnormality','unremarkable'],title:'Normal brain MRI',url:'https://radiopaedia.org/cases/normal-brain-mri-3',dx:'No intracranial abnormality identified'},
+];
+
+function radiopaediaMatch(queryText){
+  const q=queryText.toLowerCase();
+  const scored=RADIOPAEDIA_CASES.map(c=>({
+    ...c,
+    score:c.keys.filter(k=>q.includes(k)).length
+  })).filter(c=>c.score>0).sort((a,b)=>b.score-a.score);
+  return scored.slice(0,3);
+}
+
+window.testRadiopaedia=function(){
   const st=document.getElementById('rag-radio-status');
-  st.textContent='Testing…';st.style.color='var(--t2)';
-  try{
-    const r=await fetch('https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=neuroradiology+case+report&resultType=lite&pageSize=1&format=json&source=MED');
-    if(r.ok){const d=await r.json();const n=d.hitCount||'?';st.style.color='var(--gn)';st.textContent='✓ Reachable — '+n+' open-access radiology articles';toast('Europe PMC connected','ok');}
-    else{st.style.color='var(--rd)';st.textContent='✗ Error '+r.status;}
-  }catch(e){st.style.color='var(--rd)';st.textContent='✗ '+e.message;}
+  const n=RADIOPAEDIA_CASES.length;
+  st.style.color='var(--gn)';
+  st.textContent='✓ Ready — '+n+' curated cases across '+n+' diagnoses';
+  toast('Radiopaedia library ready','ok');
 };
 window.resetAll=function(){
   if(!confirm('Clear all saved data including API key?'))return;
@@ -1589,28 +1620,16 @@ window.sendChat=async function(){
     }catch(e){console.warn('PubMed RAG:',e.message);}
   }
 
-  // Europe PMC — open-access radiology case reports (CORS-enabled)
+  // Radiopaedia — curated cases matched by diagnosis keyword
   if(settings.ragRadiopaedia!==false){
-    try{
-      const q=encodeURIComponent(ragWords.replace(/\+/g,' ')+' neuroradiology case report');
-      const sr=await fetch('https://www.ebi.ac.uk/europepmc/webservices/rest/search?query='+q+'&resultType=lite&pageSize=3&format=json&source=MED&sort=RELEVANCE');
-      if(sr.ok){
-        const srj=await sr.json();
-        const articles=(srj.resultList?.result||[]).slice(0,3);
-        if(articles.length){
-          const sec=['## Europe PMC Radiology Cases'];
-          articles.forEach((a,i)=>{
-            const title=a.title||'Article';
-            const journal=a.journalTitle||'';
-            const year=a.pubYear||'';
-            const pmid=a.pmid?'https://pubmed.ncbi.nlm.nih.gov/'+a.pmid+'/':'';
-            const meta=(journal||year)?(' ('+[journal,year].filter(Boolean).join(' ')+')'):'';
-            sec.push((i+1)+'. '+title+meta+(pmid?' '+pmid:''));
-          });
-          if(sec.length>1)ragParts.push(sec.join('\n'));
-        }
-      }
-    }catch(e){console.warn('Europe PMC RAG:',e.message);}
+    const matches=radiopaediaMatch(ragWords.replace(/\+/g,' ')+' '+prompt);
+    if(matches.length){
+      const sec=['## Radiopaedia Reference Cases'];
+      matches.forEach((c,i)=>{
+        sec.push((i+1)+'. '+c.title+' — '+c.dx+' | '+c.url);
+      });
+      ragParts.push(sec.join('\n'));
+    }
   }
 
   if(ragParts.length)ragContext='## Related Literature\n'+ragParts.join('\n\n')+'\nConsider these references where clinically relevant.';
