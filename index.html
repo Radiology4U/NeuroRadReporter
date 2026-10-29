@@ -1509,15 +1509,33 @@ window.sendChat=async function(){
   const mainCv=document.getElementById('main-canvas');
   if(mainCv&&mainCv.width>0){
     try{
-      // Capture up to 3 key slices: current, middle, last
+      // Capture all slices, evenly sampled up to MAX_SLICES
       const vs2=viewSlices.length?viewSlices:slices;
-      const idxs=[...new Set([curSlice,Math.floor(vs2.length/2),vs2.length-1])].slice(0,3);
+      const MAX_SLICES=20;
+      const total=vs2.length;
+      // Always include current slice; fill rest evenly across series
+      let idxSet=new Set([curSlice]);
+      if(total<=MAX_SLICES){
+        for(let i=0;i<total;i++)idxSet.add(i);
+      } else {
+        for(let i=0;i<MAX_SLICES-1;i++)idxSet.add(Math.round(i*(total-1)/(MAX_SLICES-2)));
+      }
+      const idxs=[...idxSet].sort((a,b)=>a-b);
       for(const idx of idxs){
         const tmpCv=document.createElement('canvas');
+        // Downscale to max 512px wide to save tokens while keeping diagnostic quality
         drawCanvas(vs2[idx],tmpCv);
-        const b64=tmpCv.toDataURL('image/png').split(',')[1];
-        if(b64)imageContent.push({type:'image',source:{type:'base64',media_type:'image/png',data:b64}});
+        let outCv=tmpCv;
+        if(tmpCv.width>512){
+          outCv=document.createElement('canvas');
+          const scale=512/tmpCv.width;
+          outCv.width=512;outCv.height=Math.round(tmpCv.height*scale);
+          outCv.getContext('2d').drawImage(tmpCv,0,0,outCv.width,outCv.height);
+        }
+        const b64=outCv.toDataURL('image/jpeg',0.85).split(',')[1];
+        if(b64)imageContent.push({type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}});
       }
+      console.log('Vision: sending '+imageContent.length+' of '+total+' slices to Claude');
     }catch(imgErr){console.warn('Image capture:',imgErr);}
   }
 
@@ -1527,7 +1545,7 @@ window.sendChat=async function(){
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({
         model:settings.model,max_tokens:settings.tokens,
-        system:`You are a board-certified neuroradiologist AI. ${ctx} Carefully analyse every image sent — describe ALL visible abnormalities. Do NOT assume normal findings. Reply in ${settings.lang}. Be concise and clinically precise.`+(ragContext?'\n\n'+ragContext:''),
+        system:`You are a board-certified neuroradiologist AI. ${ctx} You are receiving the full DICOM series (${imageContent.length} slices). Carefully analyse EVERY image — describe ALL visible abnormalities with their slice location. Do NOT assume normal findings. If lesions are present, describe size, signal, location, and suggest differential diagnosis. Reply in ${settings.lang}. Be concise and clinically precise.`+(ragContext?'\n\n'+ragContext:''),
         messages:[{role:'user',content:[...imageContent,{type:'text',text:prompt}]}]
       })
     });
