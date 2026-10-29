@@ -912,14 +912,15 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
                 <button class="btn pri sm" onclick="saveSettings()">Save</button>
               </div>
           <div class="card">
-            <div class="card-hdr">🧠 RAG Knowledge Base</div>
+            <div class="card-hdr">🧠 RAG — Live Literature Search</div>
             <div class="card-body">
-              <p style="font-size:12px;color:var(--t2);margin-bottom:10px">Connect to your RAG server to enrich AI reports with similar cases from PubMed &amp; Radiopaedia. <a href="https://github.com/Radiology4U/NeuroRadReporter/tree/main/rag" target="_blank" style="color:var(--blue)">Setup guide</a></p>
-              <div class="form-grid">
-                <div class="fg"><label>RAG Server URL</label><input class="inp" id="set-rag-url" placeholder="http://localhost:8765" oninput="localStorage.setItem('nrr_rag_url',this.value)"/></div>
+              <p style="font-size:12px;color:var(--t2);margin-bottom:10px">Each AI report automatically searches PubMed for similar neuroradiology cases and injects them as context — no server needed, completely free.</p>
+              <div style="display:flex;align-items:center;gap:8px;font-size:12px">
+                <span style="width:8px;height:8px;border-radius:50%;background:var(--gn);display:inline-block"></span>
+                <span style="color:var(--t2)">Active — queries PubMed on every AI report generation</span>
               </div>
               <div class="btn-row" style="margin-top:10px;gap:8px">
-                <button class="btn pri sm" onclick="testRag()">Test connection</button>
+                <button class="btn sm" onclick="testPubmed()">Test PubMed connection</button>
                 <span id="rag-status" style="font-size:11px;color:var(--t2)"></span>
               </div>
             </div>
@@ -998,7 +999,6 @@ function loadSettings(){
   document.getElementById('set-lang').value=settings.lang;
   document.getElementById('set-inst').value=settings.inst;
   document.getElementById('set-rad').value=settings.rad;
-  try{const ru=localStorage.getItem('nrr_rag_url');if(ru)document.getElementById('set-rag-url').value=ru;}catch{}
 }
 window.saveSettings=function(){
   settings.model=document.getElementById('set-model').value;
@@ -1009,16 +1009,13 @@ window.saveSettings=function(){
   try{localStorage.setItem('nrr_settings',JSON.stringify(settings));}catch{}
   toast('Settings saved','ok');audit('SYS','Settings saved');
 };
-window.testRag=async function(){
-  const url=(document.getElementById('set-rag-url')?.value||'').trim();
-  if(!url){toast('Enter RAG server URL first','err');return;}
-  localStorage.setItem('nrr_rag_url',url);
+window.testPubmed=async function(){
   const st=document.getElementById('rag-status');
-  st.textContent='Testing…';
+  st.textContent='Testing…';st.style.color='var(--t2)';
   try{
-    const r=await fetch(url+'/retrieve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'brain MRI findings',n:1})});
-    if(r.ok){st.style.color='var(--gr)';st.textContent='✓ Connected — RAG active';toast('RAG connected','ok');}
-    else{st.style.color='var(--rd)';st.textContent='✗ Server error '+r.status;}
+    const r=await fetch('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=brain+MRI+neuroradiology&retmax=1&retmode=json');
+    if(r.ok){const d=await r.json();const n=d.esearchresult?.count||'?';st.style.color='var(--gn)';st.textContent='✓ PubMed reachable — '+n+' neuroradiology cases indexed';toast('PubMed connected','ok');}
+    else{st.style.color='var(--rd)';st.textContent='✗ PubMed error '+r.status;}
   }catch(e){st.style.color='var(--rd)';st.textContent='✗ '+e.message;}
 };
 window.resetAll=function(){
@@ -1480,19 +1477,32 @@ window.sendChat=async function(){
   const vs=viewSlices.length?viewSlices:slices;
   const ctx=vs.length?`Study: ${vs[0].patientName||'ANON'}, modality ${vs[0].modality||'unknown'}, series "${vs[0].seriesDesc||''}", ${vs.length} images. Patient DOB: ${vs[0].patientDOB||'unknown'}. Study date: ${vs[0].studyDate||'unknown'}.`:'No DICOM loaded.';
 
-  // RAG: retrieve similar cases from literature
+  // RAG: fetch similar cases live from PubMed (free, no server needed)
   let ragContext='';
-  const ragUrl=localStorage.getItem('nrr_rag_url')||'';
-  if(ragUrl){
-    try{
-      const ragRes=await fetch(ragUrl+'/retrieve',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({text:prompt,n:3})
-      });
-      if(ragRes.ok){const ragData=await ragRes.json();ragContext=ragData.context||'';}
-    }catch(e){console.warn('RAG unavailable:',e.message);}
-  }
+  try{
+    const words=prompt.replace(/[^a-zA-Z0-9 ]/g,' ').split(' ')
+      .filter(w=>w.length>4).slice(0,5).join('+');
+    const q=encodeURIComponent('neuroradiology+case+report+'+words);
+    const sr=await fetch('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term='+q+'[Title/Abstract]&retmax=3&retmode=json');
+    if(sr.ok){
+      const srj=await sr.json();
+      const ids=(srj.esearchresult?.idlist||[]).slice(0,3);
+      if(ids.length){
+        const su=await fetch('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id='+ids.join(',')+'&retmode=json');
+        if(su.ok){
+          const suj=await su.json();
+          const res=suj.result||{};
+          const parts=['## Similar PubMed Cases'];
+          ids.forEach((id,i)=>{
+            const e=res[id];
+            if(!e)return;
+            parts.push((i+1)+'. '+e.title+' ('+e.source+' '+e.pubdate+') https://pubmed.ncbi.nlm.nih.gov/'+id+'/');
+          });
+          if(parts.length>1)ragContext=parts.join('\n')+'\nConsider these references where clinically relevant.';
+        }
+      }
+    }
+  }catch(e){console.warn('PubMed RAG:',e.message);}
 
   try{
     const r=await fetch('https://api.anthropic.com/v1/messages',{
