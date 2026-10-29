@@ -957,7 +957,7 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
               </div>
               <div id="rag-pubmed-status" style="font-size:11px;color:var(--t3);margin:2px 0 10px 42px"></div>
 
-              <!-- Radiopaedia source -->
+              <!-- Europe PMC / Radiopaedia-indexed source -->
               <div class="rag-source-row">
                 <div style="display:flex;align-items:center;gap:8px;flex:1">
                   <label class="rag-toggle-wrap">
@@ -965,8 +965,8 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
                     <span class="rag-toggle-track"></span>
                   </label>
                   <div>
-                    <div style="font-size:13px;font-weight:600">Radiopaedia</div>
-                    <div style="font-size:11px;color:var(--t3)">Curated radiology cases (CC BY-NC-SA)</div>
+                    <div style="font-size:13px;font-weight:600">Europe PMC — Radiology Cases</div>
+                    <div style="font-size:11px;color:var(--t3)">Open-access radiology case reports incl. Radiopaedia-indexed</div>
                   </div>
                 </div>
                 <button class="btn sm" onclick="testRadiopaedia()">Test</button>
@@ -1079,10 +1079,10 @@ window.testRadiopaedia=async function(){
   const st=document.getElementById('rag-radio-status');
   st.textContent='Testing…';st.style.color='var(--t2)';
   try{
-    const r=await fetch('https://radiopaedia.org/search.json?lang=us&page=1&per_page=1&q=brain+MRI&scope=cases',{headers:{Accept:'application/json'}});
-    if(r.ok){const d=await r.json();const n=d.total||d.results?.length||'?';st.style.color='var(--gn)';st.textContent='✓ Reachable — '+n+' cases found';toast('Radiopaedia connected','ok');}
+    const r=await fetch('https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=neuroradiology+case+report&resultType=lite&pageSize=1&format=json&source=MED');
+    if(r.ok){const d=await r.json();const n=d.hitCount||'?';st.style.color='var(--gn)';st.textContent='✓ Reachable — '+n+' open-access radiology articles';toast('Europe PMC connected','ok');}
     else{st.style.color='var(--rd)';st.textContent='✗ Error '+r.status;}
-  }catch(e){st.style.color='var(--rd)';st.textContent='✗ CORS restricted (cases fetched via search fallback)';}
+  }catch(e){st.style.color='var(--rd)';st.textContent='✗ '+e.message;}
 };
 window.resetAll=function(){
   if(!confirm('Clear all saved data including API key?'))return;
@@ -1589,26 +1589,28 @@ window.sendChat=async function(){
     }catch(e){console.warn('PubMed RAG:',e.message);}
   }
 
-  // Radiopaedia (CORS-friendly endpoint via their search page)
+  // Europe PMC — open-access radiology case reports (CORS-enabled)
   if(settings.ragRadiopaedia!==false){
     try{
-      const q=encodeURIComponent(ragWords.replace(/\+/g,' ')+' neuroradiology');
-      const sr=await fetch('https://radiopaedia.org/search.json?lang=us&page=1&per_page=3&q='+q+'&scope=cases',{headers:{Accept:'application/json'}});
+      const q=encodeURIComponent(ragWords.replace(/\+/g,' ')+' neuroradiology case report');
+      const sr=await fetch('https://www.ebi.ac.uk/europepmc/webservices/rest/search?query='+q+'&resultType=lite&pageSize=3&format=json&source=MED&sort=RELEVANCE');
       if(sr.ok){
         const srj=await sr.json();
-        const cases=(srj.results||srj.documents||[]).slice(0,3);
-        if(cases.length){
-          const sec=['## Radiopaedia Cases'];
-          cases.forEach((c,i)=>{
-            const title=c.title||c.name||'Case';
-            const url=c.url?('https://radiopaedia.org'+c.url):(c.full_url||'');
-            const dx=c.diagnosis||c.main_diagnosis||'';
-            sec.push((i+1)+'. '+title+(dx?' — '+dx:'')+(url?' '+url:''));
+        const articles=(srj.resultList?.result||[]).slice(0,3);
+        if(articles.length){
+          const sec=['## Europe PMC Radiology Cases'];
+          articles.forEach((a,i)=>{
+            const title=a.title||'Article';
+            const journal=a.journalTitle||'';
+            const year=a.pubYear||'';
+            const pmid=a.pmid?'https://pubmed.ncbi.nlm.nih.gov/'+a.pmid+'/':'';
+            const meta=(journal||year)?(' ('+[journal,year].filter(Boolean).join(' ')+')'):'';
+            sec.push((i+1)+'. '+title+meta+(pmid?' '+pmid:''));
           });
           if(sec.length>1)ragParts.push(sec.join('\n'));
         }
       }
-    }catch(e){console.warn('Radiopaedia RAG:',e.message);}
+    }catch(e){console.warn('Europe PMC RAG:',e.message);}
   }
 
   if(ragParts.length)ragContext='## Related Literature\n'+ragParts.join('\n\n')+'\nConsider these references where clinically relevant.';
