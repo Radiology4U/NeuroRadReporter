@@ -1,1864 +1,1559 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NeuroRadReporter — Automatic Neuroradiology Reporting</title>
-
-<!--
-  SECURITY HARDENING — threat model summary
-  ══════════════════════════════════════════
-  [FIXED] XSS-1: DICOM metadata injected raw into innerHTML → sanitizeText() on all DICOM strings
-  [FIXED] XSS-2: AI report output injected into innerHTML → fmtRep() uses textContent, never innerHTML for content
-  [FIXED] XSS-3: Error messages injected into innerHTML → error display uses textContent only
-  [FIXED] INJ-1: Series UID embedded in onclick="...('UID')" → replaced with data-uid + addEventListener
-  [FIXED] PROTO: DICOM UID used as SM[uid] key → Map() instead of plain object, no prototype pollution
-  [FIXED] SRI: dicom-parser loaded without integrity hash → integrity + crossorigin attributes added
-  [FIXED] CSP: No Content-Security-Policy → meta CSP blocks inline exfiltration
-  [FIXED] DoS: No file count/size limits → enforced at import (500 files, 200MB each)
-  [FIXED] KEY: API_KEY in global let → scoped inside IIFE, not accessible from console
-  [NOTE]  API key still readable from browser memory (inherent to client-side) — document in threat model
--->
-
-<!-- CSP removed: the Claude artifact sandbox provides its own security context.
-     A restrictive CSP meta tag breaks CDN loading and API access inside the iframe.
-     Re-add CSP at the HTTP response header level when deploying to a real server. -->
-
-<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&display=swap" rel="stylesheet">
-
-<!-- SRI: integrity hash must be computed in your build pipeline (see Security page).
-     Run: curl -s https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js | openssl dgst -sha384 -binary | base64
-     Then add integrity="sha384-<hash>" crossorigin="anonymous" before production deployment.
--->
-<script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
-
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>NeuroRad Reporter — Radiology4U</title>
 <style>
-:root{--bg:#F5F3EE;--sur:#FDFCFA;--s2:#EFEDE8;--bd:rgba(40,35,28,.1);--bdm:rgba(40,35,28,.18);--bds:rgba(40,35,28,.23);--tx:#1A1714;--t2:#6B6560;--t3:#9E9892;--ac:#1A3A5C;--al:#E6EDF4;--am:#4A7BAA;--gn:#2D6A4F;--gb:#E8F5EE;--ab:#7B5E1E;--ag:#FDF3DB;--rd:#8B2020;--rg:#FDECEC;--tl:#1B5E52;--tg:#E3F4F0;--pu:#4A2D7A;--pg:#EEE8F8;--r:10px;--rs:6px}
+/* ── DESIGN TOKENS ─────────────────────────────────────────── */
+:root{
+  --bg:#080c12;
+  --sur:#0d1117;
+  --sur2:#111820;
+  --brd:#1e2a38;
+  --brd2:#263040;
+  --ac:#4a9eff;
+  --ac2:#2d7dd2;
+  --ac3:#1a5fa8;
+  --gr:#00c896;
+  --warn:#f5a623;
+  --err:#e84545;
+  --tx:#d0dae8;
+  --tx2:#8a9bb0;
+  --tx3:#556070;
+  --h1:#eaf2ff;
+  --font:'Segoe UI',system-ui,sans-serif;
+  --mono:'Consolas','Courier New',monospace;
+  --r:6px;
+  --r2:10px;
+  --sha:0 2px 12px rgba(0,0,0,.5);
+}
+
+/* ── BRAIN BACKGROUND ──────────────────────────────────────── */
+body::before{
+  content:'';
+  position:fixed;
+  inset:0;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 700'%3E%3Cg fill='none' stroke='%234a9eff' stroke-width='1.2' opacity='0.06'%3E%3Cellipse cx='400' cy='320' rx='260' ry='220'/%3E%3Cellipse cx='400' cy='310' rx='220' ry='185'/%3E%3Cpath d='M200 280 Q180 230 210 190 Q240 150 290 160 Q320 165 340 190'/%3E%3Cpath d='M600 280 Q620 230 590 190 Q560 150 510 160 Q480 165 460 190'/%3E%3Cpath d='M290 160 Q320 140 360 145 Q390 148 400 155 Q410 148 440 145 Q480 140 510 160'/%3E%3Cpath d='M260 200 Q250 240 255 280 Q260 320 270 350'/%3E%3Cpath d='M540 200 Q550 240 545 280 Q540 320 530 350'/%3E%3Cpath d='M200 280 Q195 320 200 360 Q205 400 220 430'/%3E%3Cpath d='M600 280 Q605 320 600 360 Q595 400 580 430'/%3E%3Cpath d='M270 350 Q280 380 295 405 Q315 430 340 445'/%3E%3Cpath d='M530 350 Q520 380 505 405 Q485 430 460 445'/%3E%3Cpath d='M340 445 Q365 455 400 457 Q435 455 460 445'/%3E%3Cpath d='M220 430 Q240 460 270 475 Q300 488 330 488'/%3E%3Cpath d='M580 430 Q560 460 530 475 Q500 488 470 488'/%3E%3Cpath d='M330 488 Q365 495 400 496 Q435 495 470 488'/%3E%3Cpath d='M390 155 L390 496'/%3E%3Cpath d='M410 155 L410 496'/%3E%3Cpath d='M300 175 Q310 210 315 250 Q318 290 315 330'/%3E%3Cpath d='M500 175 Q490 210 485 250 Q482 290 485 330'/%3E%3Cpath d='M315 330 Q310 370 305 400 Q298 425 290 445'/%3E%3Cpath d='M485 330 Q490 370 495 400 Q502 425 510 445'/%3E%3Ccircle cx='400' cy='200' r='18' opacity='0.5'/%3E%3Ccircle cx='320' cy='240' r='8' opacity='0.3'/%3E%3Ccircle cx='480' cy='240' r='8' opacity='0.3'/%3E%3Cpath d='M350 270 Q370 260 390 265 Q410 270 430 260 Q450 250 460 270 Q465 285 450 295 Q435 305 415 300 Q400 296 385 300 Q365 307 350 295 Q338 285 350 270Z' opacity='0.4'/%3E%3C/g%3E%3C/svg%3E");
+  background-size:70% auto;
+  background-position:center center;
+  background-repeat:no-repeat;
+  pointer-events:none;
+  z-index:0;
+}
+body::after{
+  content:'';
+  position:fixed;
+  inset:0;
+  background:
+    radial-gradient(ellipse 60% 50% at 15% 50%, rgba(74,158,255,.04) 0%, transparent 70%),
+    radial-gradient(ellipse 40% 60% at 85% 30%, rgba(0,200,150,.03) 0%, transparent 70%),
+    radial-gradient(ellipse 80% 40% at 50% 100%, rgba(8,12,18,.8) 0%, transparent 60%);
+  pointer-events:none;
+  z-index:0;
+}
+
+/* ── RESET / BASE ───────────────────────────────────────────── */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--tx);font-size:14px;line-height:1.6;min-height:100vh}
-.shell{display:flex;height:100vh;overflow:hidden}
-.sidebar{width:220px;min-width:220px;background:var(--sur);border-right:.5px solid var(--bds);display:flex;flex-direction:column;overflow-y:auto}
-.main{flex:1;overflow-y:auto;background:var(--bg)}
-.page{display:none;padding:22px 26px}.page.active{display:block}
-.sb-logo{padding:15px 15px 12px;border-bottom:.5px solid var(--bd)}
-.wm{font-family:'Instrument Serif',serif;font-size:17px;letter-spacing:-.3px}
-.wm span{color:var(--am)}
-.tl{font-size:10px;color:var(--t3);letter-spacing:.07em;text-transform:uppercase;margin-top:2px}
-.nav{padding:6px 0;flex:1}
-.ns{padding:7px 15px 3px;font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--t3)}
-.ni{display:flex;align-items:center;gap:8px;padding:7px 15px;cursor:pointer;font-size:13px;color:var(--t2);transition:background .1s,color .1s;position:relative}
-.ni:hover{background:var(--s2);color:var(--tx)}.ni.active{background:var(--al);color:var(--ac);font-weight:500}
-.ni.active::before{content:'';position:absolute;left:0;top:20%;bottom:20%;width:3px;background:var(--ac);border-radius:0 3px 3px 0}
-.ni svg{width:14px;height:14px;opacity:.65;flex-shrink:0}.ni.active svg{opacity:1}
-.nbadge{margin-left:auto;background:var(--ac);color:#fff;font-size:10px;padding:1px 6px;border-radius:20px;font-weight:500}.nbadge.g{background:var(--gn)}
-.sb-foot{padding:10px 15px;border-top:.5px solid var(--bd);font-size:11px;color:var(--t3)}
-.sb-foot strong{color:var(--t2);font-weight:500}
-.cb{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:500;padding:3px 7px;border-radius:20px;margin-top:4px}
-.cb::before{content:'';width:5px;height:5px;border-radius:50%}
-.cb.g{background:var(--gb);color:var(--gn)}.cb.g::before{background:var(--gn)}
-.cb.p{background:var(--pg);color:var(--pu)}.cb.p::before{background:var(--pu)}
-.cb.r{background:var(--rg);color:var(--rd)}.cb.r::before{background:var(--rd)}
-.api-bar{background:var(--s2);border-bottom:.5px solid var(--bds);padding:8px 15px;display:flex;align-items:center;gap:8px;font-size:12px;flex-shrink:0}
-.api-bar label{color:var(--t2);font-weight:500;white-space:nowrap}
-.api-bar input{flex:1;padding:5px 9px;border:.5px solid var(--bds);border-radius:var(--rs);font-size:12px;font-family:'DM Mono',monospace;background:var(--sur);color:var(--tx);min-width:0}
-.api-status{font-size:10px;padding:2px 7px;border-radius:20px;font-weight:500;white-space:nowrap}
-.api-status.set{background:var(--gb);color:var(--gn)}.api-status.unset{background:var(--rg);color:var(--rd)}
-.ph{margin-bottom:16px}
-.ph h1{font-family:'Instrument Serif',serif;font-size:23px;font-weight:400;letter-spacing:-.3px;line-height:1.2}
-.ph p{font-size:13px;color:var(--t2);margin-top:3px}
-.card{background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);padding:14px 17px;margin-bottom:12px}
-.ct{font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--t3);margin-bottom:10px}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
-.stat{background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);padding:10px 12px}
-.sl{font-size:11px;color:var(--t3);margin-bottom:2px}
-.sv{font-family:'DM Mono',monospace;font-size:20px}
-.sv.b{color:var(--ac)}.sv.g{color:var(--gn)}.sv.a{color:var(--ab)}.sv.r{color:var(--rd)}
-.dz{border:1.5px dashed var(--bds);border-radius:var(--r);padding:28px 20px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s;background:var(--sur);margin-bottom:12px}
-.dz:hover,.dz.over{border-color:var(--am);background:var(--al)}
-.dz svg{margin:0 auto 9px;width:32px;height:32px;opacity:.28;display:block}
-.dzt{font-size:14px;font-weight:500;margin-bottom:3px}
-.dzs{font-size:12px;color:var(--t2)}.dzl{color:var(--ac);text-decoration:underline;cursor:pointer}
-input[type=file]{display:none}
-.tw{background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);overflow:hidden;margin-bottom:12px}
-table{width:100%;border-collapse:collapse;font-size:12.5px;table-layout:fixed}
-thead tr{background:var(--s2);border-bottom:.5px solid var(--bds)}
-th{padding:7px 11px;text-align:left;font-weight:500;font-size:11px;color:var(--t3);letter-spacing:.04em}
-td{padding:7px 11px;color:var(--tx);border-bottom:.5px solid var(--bd);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}
-tr:last-child td{border-bottom:none}
-tr:hover td{background:var(--s2)}
-.es{padding:18px;text-align:center;color:var(--t3);font-size:12.5px}
-.badge{display:inline-block;padding:2px 7px;border-radius:20px;font-size:11px;font-weight:500}
-.bp{background:var(--ag);color:var(--ab)}.bd2{background:var(--gb);color:var(--gn)}.be{background:var(--rg);color:var(--rd)}.bpr{background:var(--al);color:var(--ac)}.brp{background:var(--tg);color:var(--tl)}.bpu{background:var(--pg);color:var(--pu)}
-.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:var(--rs);font-size:13px;font-weight:500;cursor:pointer;transition:all .12s;border:.5px solid var(--bds);font-family:'DM Sans',sans-serif}
-.btn-p{background:var(--ac);color:#fff;border-color:var(--ac)}.btn-p:hover{background:#13304f}
-.btn-s{background:var(--sur);color:var(--tx)}.btn-s:hover{background:var(--s2)}
-.btn-g{background:transparent;border-color:transparent;color:var(--t2);padding:4px 8px;font-size:12px}.btn-g:hover{background:var(--s2);color:var(--tx)}
-.btn:disabled{opacity:.3;cursor:not-allowed;pointer-events:none}
-.brow{display:flex;gap:8px;align-items:center}
-.pw{flex:1;height:4px;background:var(--s2);border-radius:20px;overflow:hidden}
-.pf{height:100%;background:var(--am);border-radius:20px;transition:width .3s}
-.mc{font-family:'DM Mono',monospace;font-size:10px;color:var(--t3);background:var(--s2);border-radius:4px;padding:2px 5px;border:.5px solid var(--bd);max-width:130px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ob{display:flex;align-items:flex-start;gap:10px;background:var(--ag);border:.5px solid #E2B96A;border-radius:var(--r);padding:11px 15px;margin-bottom:12px;font-size:12.5px;color:var(--ab)}
-.ob.hi{background:var(--pg);border-color:#C4AEE8;color:var(--pu)}
-.ob svg{flex-shrink:0;margin-top:1px}.ob strong{display:block;font-weight:500;margin-bottom:1px}
-.tcs{display:flex;flex-wrap:wrap;gap:5px}
-.tc{font-size:11px;padding:2px 8px;background:var(--s2);border:.5px solid var(--bd);border-radius:20px;color:var(--t2)}
-.rep-layout{display:grid;grid-template-columns:280px 1fr;gap:12px;align-items:start}
-.sp{background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);overflow:hidden}
-.sp-head{padding:10px 14px;border-bottom:.5px solid var(--bd);display:flex;align-items:center;justify-content:space-between}
-.sp-head h3{font-size:13px;font-weight:500}
-.sl-list{max-height:calc(100vh - 270px);overflow-y:auto}
-.si{padding:10px 14px;border-bottom:.5px solid var(--bd);cursor:pointer;transition:background .1s}
-.si:last-child{border-bottom:none}.si:hover{background:var(--s2)}
-.si.active{background:var(--al);border-left:3px solid var(--ac)}.si.active .si-t{color:var(--ac)}
-.si-t{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:3px}
-.si-m{font-size:11px;color:var(--t3);display:flex;gap:7px;flex-wrap:wrap}
-.si-s{margin-top:4px}
-.sl-empty{padding:20px 14px;text-align:center;color:var(--t3);font-size:12.5px}
-.rp{background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);display:flex;flex-direction:column;min-height:460px}
-.rp-head{padding:10px 14px;border-bottom:.5px solid var(--bd);display:flex;align-items:center;gap:10px}
-.rp-head h3{font-size:13px;font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* ── DICOM Viewer ── */
-.viewer-wrap{display:flex;flex-direction:column;background:#111;border-bottom:.5px solid var(--bd)}
-.viewer-main{position:relative;display:flex;align-items:center;justify-content:center;background:#000;min-height:340px;user-select:none}
-.viewer-canvas{display:block;max-width:100%;max-height:420px;object-fit:contain;image-rendering:pixelated}
-.viewer-overlay{position:absolute;top:8px;left:10px;font-family:'DM Mono',monospace;font-size:10px;color:rgba(255,255,255,.55);line-height:1.7;pointer-events:none}
-.viewer-overlay-br{position:absolute;bottom:8px;right:10px;font-family:'DM Mono',monospace;font-size:10px;color:rgba(255,255,255,.45);pointer-events:none;text-align:right}
-.viewer-nav{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.1);border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:18px;padding:8px 10px;transition:background .12s;line-height:1}
-.viewer-nav:hover{background:rgba(255,255,255,.25)}
-.viewer-nav.prev{left:8px}.viewer-nav.next{right:8px}
-.viewer-controls{display:flex;align-items:center;gap:10px;padding:7px 12px;background:#1a1a1a;border-bottom:1px solid #2a2a2a}
-.viewer-slider{flex:1;accent-color:var(--am);cursor:pointer;height:3px}
-.viewer-slice-lbl{font-family:'DM Mono',monospace;font-size:10px;color:rgba(255,255,255,.5);white-space:nowrap;min-width:60px;text-align:right}
-.viewer-ww-btn{background:rgba(255,255,255,.08);border:none;border-radius:3px;color:rgba(255,255,255,.5);cursor:pointer;font-size:10px;font-family:'DM Mono',monospace;padding:2px 7px;transition:background .12s}
-.viewer-ww-btn:hover,.viewer-ww-btn.active{background:rgba(74,123,170,.4);color:#7aafdd}
-.filmstrip{display:flex;gap:4px;padding:8px 10px;background:#0d0d0d;overflow-x:auto;min-height:74px;align-items:center;scrollbar-width:thin;scrollbar-color:#333 #0d0d0d}
-.filmstrip::-webkit-scrollbar{height:4px}.filmstrip::-webkit-scrollbar-track{background:#0d0d0d}.filmstrip::-webkit-scrollbar-thumb{background:#333;border-radius:2px}
-.fs-frame{flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer}
-.fs-canvas{width:56px;height:56px;border-radius:3px;border:1.5px solid #2a2a2a;display:block;image-rendering:pixelated;transition:border-color .1s}
-.fs-frame.active .fs-canvas{border-color:var(--am);box-shadow:0 0 0 1px var(--am)}
-.fs-frame:hover .fs-canvas{border-color:#555}
-.fs-lbl{font-family:'DM Mono',monospace;font-size:8px;color:#444}
-.fs-frame.active .fs-lbl{color:var(--am)}
-.thumbs{display:none} /* hidden — replaced by viewer */
-.tw-wrap,.thumb,.tw-lbl,.tw-kb{display:none}
-.rp-tabs{display:flex;border-bottom:.5px solid var(--bd)}
-.rp-tab{padding:8px 13px;font-size:12.5px;cursor:pointer;color:var(--t2);border-bottom:2px solid transparent;transition:all .12s;background:none;border-top:none;border-left:none;border-right:none;font-family:'DM Sans',sans-serif}
-.rp-tab:hover{color:var(--tx)}.rp-tab.active{color:var(--ac);border-bottom-color:var(--ac);font-weight:500}
-.rp-body{flex:1;overflow-y:auto;padding:14px;min-height:300px;max-height:calc(100vh - 400px)}
-.rsect{font-weight:500;font-size:13px;color:var(--tx);margin-top:12px;margin-bottom:2px}
-.rline{font-size:12.5px;color:var(--t2);line-height:1.65}
-.oe{padding:32px 14px;text-align:center;color:var(--t3)}
-.oe-ic{font-size:28px;margin-bottom:8px;opacity:.35}
-.oe p{font-size:13px;margin-bottom:3px}.oe-sub{font-size:12px;color:var(--t3)}
-.tip{background:var(--s2);border-radius:var(--rs);padding:7px 10px;font-size:12px;color:var(--t2);margin-top:9px;border:.5px solid var(--bd);max-width:300px;margin-left:auto;margin-right:auto}
-.gen{padding:18px 14px;display:flex;flex-direction:column;gap:12px}
-.gs{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--t2)}
-.gs.done{color:var(--gn)}.gs.act{color:var(--ac)}.gs.wait{color:var(--t3)}
-.gic{width:20px;height:20px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px}
-.spin-ic{border:2px solid var(--bdm);border-top-color:var(--ac);animation:sp .7s linear infinite}
-.done-ic{background:var(--gb);color:var(--gn)}.wait-ic{background:var(--s2);color:var(--t3)}
-@keyframes sp{to{transform:rotate(360deg)}}
-.mgrid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
-.mg{background:var(--s2);border-radius:var(--rs);padding:7px 9px}
-.mg-l{font-size:10px;color:var(--t3);letter-spacing:.05em;text-transform:uppercase;margin-bottom:2px}
-.mg-v{font-size:12.5px;font-weight:500;word-break:break-all}
-.disc{padding:8px 13px;border-top:.5px solid var(--bd);font-size:11px;color:var(--t3);background:var(--s2);border-radius:0 0 var(--r) var(--r)}
-.copy-btn{background:var(--s2);border:.5px solid var(--bd);border-radius:var(--rs);padding:4px 9px;font-size:12px;cursor:pointer;color:var(--t2);font-family:'DM Sans',sans-serif;flex-shrink:0}
-.copy-btn:hover{background:var(--gb);color:var(--gn)}
-.err-box{background:var(--rg);border:.5px solid #E8A0A0;border-radius:var(--rs);padding:10px 14px;font-size:12.5px;color:var(--rd);margin-bottom:12px}
-.sec-banner{background:var(--s2);border:.5px solid var(--bds);border-radius:var(--rs);padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--t2)}
-.sec-banner strong{color:var(--tx);font-weight:500}
-.cg{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
-.cc{background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);padding:14px 16px}
-.cc.full{grid-column:1/-1}
-.cch{display:flex;align-items:flex-start;gap:9px;margin-bottom:9px}
-.cci{width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.cci.b{background:var(--al)}.cci.g{background:var(--gb)}.cci.a{background:var(--ag)}.cci.t{background:var(--tg)}.cci.p{background:var(--pg)}
-.cct{font-weight:500;font-size:13px;margin-bottom:1px}.ccs{font-size:11px;color:var(--t3)}
-.cl{list-style:none;display:flex;flex-direction:column;gap:6px}
-.cl li{display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--t2);line-height:1.5}
-.cl li::before{content:'';width:15px;height:15px;border-radius:50%;flex-shrink:0;margin-top:1px;background:var(--gb);border:1.5px solid var(--gn);background-image:url("data:image/svg+xml,%3Csvg width='9' height='7' viewBox='0 0 9 7' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 3.5L3.2 6L8 1' stroke='%232D6A4F' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:center}
-.cl li.w::before{background:var(--ag);border-color:#A0761F;background-image:url("data:image/svg+xml,%3Csvg width='9' height='9' viewBox='0 0 9 9' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M4.5 2V5' stroke='%23A0761F' stroke-width='1.4' stroke-linecap='round'/%3E%3Ccircle cx='4.5' cy='7' r='.7' fill='%23A0761F'/%3E%3C/svg%3E");background-position:center}
-.ar{font-family:'DM Mono',monospace;font-size:10px;color:var(--ac);background:var(--al);padding:1px 5px;border-radius:3px;margin-right:3px}
-.ar.h{color:var(--pu);background:var(--pg)}.ar.r{color:var(--rd);background:var(--rg)}
-.ctl{list-style:none;position:relative;padding-left:20px;display:flex;flex-direction:column}
-.ctl::before{content:'';position:absolute;left:5px;top:8px;bottom:8px;width:1px;background:var(--bds)}
-.ctl-i{position:relative;padding:0 0 12px 10px}.ctl-i:last-child{padding-bottom:0}
-.ctl-i::before{content:'';position:absolute;left:-4px;top:4px;width:9px;height:9px;border-radius:50%;background:var(--s2);border:1.5px solid var(--bds)}
-.ctl-i.on::before{background:var(--gn);border-color:var(--gn)}.ctl-i.up::before{background:var(--ag);border-color:#A0761F}
-.ctl-d{font-family:'DM Mono',monospace;font-size:10px;color:var(--t3);margin-bottom:1px}
-.ctl-t{font-size:12.5px;font-weight:500}.ctl-ds{font-size:11.5px;color:var(--t2);margin-top:2px;line-height:1.5}
-.ae{display:flex;gap:10px;padding:8px 0;border-bottom:.5px solid var(--bd);font-size:12px}
-.ae:last-child{border-bottom:none}
-.at2{font-family:'DM Mono',monospace;font-size:10.5px;color:var(--t3);min-width:64px;padding-top:2px}
-.am2{color:var(--t2);flex:1}.am2 strong{color:var(--tx);font-weight:500}
-.alv{font-size:10px;padding:1px 6px;border-radius:3px;align-self:flex-start;font-weight:500}
-.alv.info{background:var(--al);color:var(--ac)}.alv.ok{background:var(--gb);color:var(--gn)}.alv.warn{background:var(--ag);color:var(--ab)}
-.srow{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:.5px solid var(--bd)}
-.srow:last-child{border-bottom:none}
-.srl{font-size:13px;font-weight:500}.srd{font-size:11.5px;color:var(--t3);margin-top:1px}
-.tog{position:relative;width:32px;height:19px;flex-shrink:0}
-.tog input{opacity:0;width:0;height:0}
-.tog-t{position:absolute;inset:0;border-radius:20px;background:var(--s2);border:.5px solid var(--bds);cursor:pointer;transition:background .14s}
-.tog input:checked+.tog-t{background:var(--ac);border-color:var(--ac)}
-.tog-th{position:absolute;top:3px;left:3px;width:13px;height:13px;border-radius:50%;background:var(--sur);transition:left .14s;pointer-events:none}
-.tog input:checked~.tog-th{left:16px}
-.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--tx);color:var(--sur);padding:8px 16px;border-radius:var(--rs);font-size:13px;opacity:0;transition:opacity .16s;pointer-events:none;z-index:999;font-family:'DM Sans',sans-serif}
-.toast.show{opacity:1}
+html,body{height:100%;overflow:hidden}
+body{
+  background:var(--bg);
+  color:var(--tx);
+  font-family:var(--font);
+  font-size:13px;
+  line-height:1.5;
+  position:relative;
+  z-index:1;
+}
 
-/* ── Chat ── */
-.chat-wrap{display:flex;flex-direction:column;height:100%;min-height:420px}
-.chat-welcome{display:flex;flex-direction:column;align-items:center;text-align:center;padding:28px 16px;gap:10px}
-.chat-welcome-icon{font-size:2rem;opacity:.5}
-.chat-welcome-title{font-family:'Instrument Serif',serif;font-size:16px;color:var(--tx);font-style:italic}
-.chat-welcome-sub{font-size:12px;color:var(--t2);line-height:1.6;max-width:300px}
-.chat-ctx-pill{background:var(--al);color:var(--ac);border:.5px solid rgba(74,123,170,.3);border-radius:20px;font-size:11px;padding:3px 11px;display:inline-flex;align-items:center;gap:5px}
-.chat-sq-wrap{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:6px}
-.chat-sq{font-size:11px;padding:4px 11px;background:var(--s2);border:.5px solid var(--bds);border-radius:20px;color:var(--t2);cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .12s}
-.chat-sq:hover{border-color:var(--am);color:var(--ac);background:var(--al)}
-.chat-msgs{flex:1;display:flex;flex-direction:column;gap:10px;overflow-y:auto;padding:10px 14px}
-.chat-msg{display:flex;flex-direction:column;gap:3px;max-width:90%}
-.chat-msg.user{align-self:flex-end;align-items:flex-end}
-.chat-msg.assistant{align-self:flex-start;align-items:flex-start}
-.chat-msg-lbl{font-size:10px;color:var(--t3);letter-spacing:.05em;padding:0 3px;text-transform:uppercase}
-.chat-msg-body{font-size:12.5px;line-height:1.7;padding:9px 13px;border-radius:var(--r)}
-.chat-msg.user .chat-msg-body{background:var(--ac);color:#fff;border-bottom-right-radius:3px}
-.chat-msg.assistant .chat-msg-body{background:var(--sur);border:.5px solid var(--bds);color:var(--t2);border-bottom-left-radius:3px}
-@keyframes thinking{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-4px);opacity:1}}
-.chat-thinking{display:flex;gap:4px;padding:10px 13px;background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);border-bottom-left-radius:3px}
-.chat-thinking span{width:5px;height:5px;background:var(--t3);border-radius:50%;animation:thinking 1.2s ease-in-out infinite}
-.chat-thinking span:nth-child(2){animation-delay:.2s}
-.chat-thinking span:nth-child(3){animation-delay:.4s}
-.chat-input-row{display:flex;gap:7px;padding:10px 14px;border-top:.5px solid var(--bd);margin-top:auto;background:var(--sur)}
-.chat-input{flex:1;padding:7px 11px;border:.5px solid var(--bds);border-radius:var(--rs);font-size:12.5px;font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--tx);outline:none;transition:border-color .12s}
-.chat-input:focus{border-color:var(--am)}
-.chat-send{padding:7px 13px;font-size:13px}
+/* ── SCROLLBARS ─────────────────────────────────────────────── */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--sur)}
+::-webkit-scrollbar-thumb{background:var(--brd2);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--ac3)}
 
-/* ── PACS page ── */
-.pacs-mode-row{display:flex;border:.5px solid var(--bds);border-radius:var(--rs);overflow:hidden;margin-bottom:14px}
-.pacs-mode-btn{flex:1;background:transparent;border:none;color:var(--t2);cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12.5px;padding:8px 12px;transition:all .12s;text-align:center}
-.pacs-mode-btn:first-child{border-right:.5px solid var(--bds)}
-.pacs-mode-btn.active{background:var(--al);color:var(--ac);font-weight:500}
-.pacs-group-lbl{font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--t3);margin:10px 0 5px;padding-left:3px;border-left:2px solid var(--am);padding-left:7px}
-.pacs-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:4px}
-.pacs-card{background:var(--sur);border:.5px solid var(--bds);border-radius:var(--rs);cursor:pointer;display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:10px 12px;text-align:left;transition:all .12s;font-family:'DM Sans',sans-serif}
-.pacs-card:hover,.pacs-card.active{border-color:var(--am);background:var(--al)}
-.pacs-card-icon{font-size:1rem;color:var(--ac);margin-bottom:2px}
-.pacs-card-name{font-size:12.5px;font-weight:500;color:var(--tx)}
-.pacs-card-desc{font-size:10px;color:var(--t3)}
-.pacs-fields{display:flex;flex-direction:column;gap:8px;margin-top:10px}
-.pacs-field{display:flex;flex-direction:column;gap:4px}
-.pacs-field label{font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--t3)}
-.pacs-field input,.pacs-field select{padding:6px 10px;border:.5px solid var(--bds);border-radius:var(--rs);font-size:12.5px;font-family:'DM Sans',sans-serif;background:var(--sur);color:var(--tx);outline:none;width:100%;transition:border-color .12s}
-.pacs-field input:focus,.pacs-field select:focus{border-color:var(--am)}
-.pacs-field-row{display:flex;gap:8px}
-.pacs-field-row .pacs-field{flex:1}
-.pacs-info-box{background:var(--ag);border:.5px solid #E2B96A;border-radius:var(--rs);color:var(--ab);font-size:11.5px;line-height:1.6;padding:9px 12px;margin-top:6px}
-.pacs-info-box code{font-family:'DM Mono',monospace;font-size:10px;background:rgba(123,94,30,.1);border-radius:3px;padding:1px 4px}
-.pacs-status-row{display:flex;align-items:center;gap:7px;border-radius:var(--rs);font-size:12px;padding:8px 12px;margin-top:10px}
-.pacs-status-row.testing,.pacs-status-row.exporting{background:var(--al);color:var(--ac);border:.5px solid rgba(74,123,170,.3)}
-.pacs-status-row.ok,.pacs-status-row.done{background:var(--gb);color:var(--gn);border:.5px solid rgba(45,106,79,.3)}
-.pacs-status-row.error{background:var(--rg);color:var(--rd);border:.5px solid #E8A0A0}
-.pacs-actions-row{display:flex;gap:8px;margin-top:12px}
-.pacs-study-list{display:flex;flex-direction:column;gap:5px;margin-top:10px}
-.pacs-study-row{display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--sur);border:.5px solid var(--bds);border-radius:var(--rs);padding:8px 12px;transition:border-color .12s}
-.pacs-study-row:hover{border-color:var(--am)}
-.pacs-study-desc{font-size:12.5px;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pacs-study-meta{display:flex;gap:9px;flex-wrap:wrap;margin-top:2px}
-.pacs-study-meta span{font-size:10px;color:var(--t3)}
-.pacs-spinner{display:inline-block;width:11px;height:11px;border:1.5px solid rgba(74,123,170,.3);border-top-color:var(--ac);border-radius:50%;animation:sp .7s linear infinite}
+/* ── SHELL ──────────────────────────────────────────────────── */
+#app{display:flex;flex-direction:column;height:100vh;position:relative;z-index:1}
+
+/* ── HEADER ─────────────────────────────────────────────────── */
+#hdr{
+  display:flex;align-items:center;gap:12px;
+  padding:0 16px;height:48px;
+  background:rgba(13,17,23,.95);
+  border-bottom:1px solid var(--brd);
+  backdrop-filter:blur(8px);
+  flex-shrink:0;
+  position:relative;z-index:10;
+}
+.logo-mark{
+  width:32px;height:32px;
+  background:linear-gradient(135deg,var(--ac3),var(--ac));
+  border-radius:8px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:16px;font-weight:700;color:#fff;
+  box-shadow:0 0 12px rgba(74,158,255,.3);
+}
+.logo-txt{font-size:14px;font-weight:600;color:var(--h1);letter-spacing:.5px}
+.logo-sub{font-size:10px;color:var(--tx3);letter-spacing:1px;text-transform:uppercase}
+.hdr-spacer{flex:1}
+.badge{
+  font-size:10px;padding:2px 8px;border-radius:99px;
+  background:rgba(74,158,255,.12);border:1px solid rgba(74,158,255,.25);
+  color:var(--ac);letter-spacing:.5px;text-transform:uppercase
+}
+#api-bar{
+  display:flex;align-items:center;gap:6px;
+  background:rgba(255,255,255,.04);
+  border:1px solid var(--brd);
+  border-radius:var(--r);
+  padding:3px 8px;
+  transition:all .2s;
+}
+#api-bar.hidden{display:none}
+#api-bar label{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}
+#api-key-input{
+  background:none;border:none;outline:none;
+  color:var(--tx);font-size:12px;font-family:var(--mono);
+  width:200px;
+}
+#api-key-input::placeholder{color:var(--tx3)}
+.btn-xs{
+  padding:3px 10px;border-radius:4px;border:none;cursor:pointer;
+  font-size:11px;font-weight:600;transition:all .15s;
+}
+.btn-xs.pri{background:var(--ac);color:#fff}
+.btn-xs.pri:hover{background:var(--ac2)}
+.btn-xs.sec{background:var(--brd);color:var(--tx2)}
+.btn-xs.sec:hover{background:var(--brd2)}
+#api-saved-bar{
+  display:flex;align-items:center;gap:6px;
+  font-size:11px;color:var(--tx3);
+  cursor:pointer;
+  padding:3px 8px;
+  border-radius:var(--r);
+  border:1px solid transparent;
+  transition:all .15s;
+}
+#api-saved-bar:hover{border-color:var(--brd);color:var(--tx2)}
+#api-saved-bar .dot{
+  width:6px;height:6px;border-radius:50%;
+  background:var(--gr);
+  box-shadow:0 0 6px var(--gr);
+}
+#api-saved-bar.hidden{display:none}
+
+/* ── NAV TABS ───────────────────────────────────────────────── */
+#nav{
+  display:flex;align-items:center;gap:0;
+  padding:0 16px;
+  background:rgba(13,17,23,.9);
+  border-bottom:1px solid var(--brd);
+  flex-shrink:0;
+  position:relative;z-index:9;
+}
+.tab{
+  padding:8px 16px;font-size:12px;font-weight:500;
+  color:var(--tx3);border:none;background:none;cursor:pointer;
+  border-bottom:2px solid transparent;
+  transition:all .15s;margin-bottom:-1px;
+  letter-spacing:.3px;
+}
+.tab:hover{color:var(--tx)}
+.tab.active{color:var(--ac);border-bottom-color:var(--ac)}
+
+/* ── MAIN AREA ──────────────────────────────────────────────── */
+#main{flex:1;overflow:hidden;min-height:0;display:flex;flex-direction:column}
+.view{display:none;flex:1;min-height:0;flex-direction:column;overflow:hidden}
+.view.active{display:flex}
+
+/* ── REPORTING VIEW ─────────────────────────────────────────── */
+.rep-layout{
+  display:flex;flex:1;min-height:0;
+  height:calc(100vh - 96px);
+  gap:0;
+}
+.sp{
+  width:340px;min-width:260px;max-width:420px;
+  display:flex;flex-direction:column;
+  border-right:1px solid var(--brd);
+  background:rgba(13,17,23,.8);
+  flex-shrink:0;
+  height:100%;
+}
+.rp{
+  flex:1;min-width:0;
+  display:flex;flex-direction:column;
+  height:100%;
+}
+
+/* ── STUDY PANEL ────────────────────────────────────────────── */
+.sp-hdr{
+  padding:10px 12px;
+  border-bottom:1px solid var(--brd);
+  display:flex;align-items:center;gap:8px;
+  flex-shrink:0;
+}
+.sp-hdr-title{font-size:11px;font-weight:600;color:var(--tx2);text-transform:uppercase;letter-spacing:.8px;flex:1}
+.btn-sm{
+  padding:4px 10px;border-radius:var(--r);border:1px solid var(--brd2);
+  background:var(--sur2);color:var(--tx2);font-size:11px;cursor:pointer;
+  transition:all .15s;white-space:nowrap;
+}
+.btn-sm:hover{background:var(--brd);color:var(--tx)}
+.btn-sm.pri{background:rgba(74,158,255,.15);border-color:rgba(74,158,255,.4);color:var(--ac)}
+.btn-sm.pri:hover{background:rgba(74,158,255,.25)}
+.sp-body{
+  flex:1;overflow-y:auto;padding:8px;
+  display:flex;flex-direction:column;gap:6px;
+}
+
+/* ── FILE DROP ──────────────────────────────────────────────── */
+.drop-zone{
+  border:1.5px dashed var(--brd2);
+  border-radius:var(--r2);
+  padding:20px 12px;
+  text-align:center;
+  cursor:pointer;
+  transition:all .2s;
+  background:rgba(255,255,255,.015);
+}
+.drop-zone:hover,.drop-zone.over{
+  border-color:var(--ac);
+  background:rgba(74,158,255,.06);
+}
+.drop-icon{font-size:24px;margin-bottom:6px;opacity:.5}
+.drop-txt{font-size:11px;color:var(--tx3);line-height:1.6}
+.drop-txt strong{color:var(--tx2)}
+
+/* ── VIEWER ─────────────────────────────────────────────────── */
+.viewer-wrap{
+  display:flex;flex-direction:column;
+  flex:1;min-height:0;
+  overflow:hidden;
+}
+.viewer-main{
+  flex:1;min-height:0;
+  height:clamp(300px, 42vh, 560px);
+  position:relative;
+  background:#000;
+  overflow:hidden;
+  display:flex;align-items:center;justify-content:center;
+}
+.viewer-canvas{
+  max-width:100%;max-height:100%;
+  width:auto;height:auto;
+  display:block;
+  image-rendering:pixelated;
+}
+.viewer-empty{
+  position:absolute;inset:0;
+  display:flex;align-items:center;justify-content:center;
+  flex-direction:column;gap:8px;
+  color:var(--tx3);font-size:12px;
+}
+.viewer-empty-icon{font-size:40px;opacity:.2}
+.viewer-overlay{
+  position:absolute;top:6px;left:6px;right:6px;
+  display:flex;justify-content:space-between;
+  pointer-events:none;font-size:10px;font-family:var(--mono);
+  color:rgba(255,210,0,.75);text-shadow:0 1px 3px #000;
+}
+.viewer-overlay-br{
+  position:absolute;bottom:6px;right:6px;
+  font-size:10px;font-family:var(--mono);
+  color:rgba(255,210,0,.6);text-shadow:0 1px 3px #000;
+  pointer-events:none;
+}
+.viewer-controls{
+  display:flex;align-items:center;gap:6px;
+  padding:6px 8px;
+  background:rgba(13,17,23,.9);
+  border-top:1px solid var(--brd);
+  flex-shrink:0;
+  flex-wrap:wrap;
+}
+.vc-btn{
+  padding:3px 8px;border-radius:4px;border:1px solid var(--brd2);
+  background:var(--sur2);color:var(--tx2);font-size:10px;cursor:pointer;
+  transition:all .12s;
+}
+.vc-btn:hover{background:var(--brd);color:var(--tx)}
+.vc-btn.active{background:rgba(74,158,255,.2);border-color:rgba(74,158,255,.5);color:var(--ac)}
+.vc-sep{width:1px;height:14px;background:var(--brd);flex-shrink:0}
+.slice-bar{
+  display:flex;align-items:center;gap:6px;
+  padding:4px 8px;
+  background:rgba(8,12,18,.6);
+  border-top:1px solid var(--brd);
+  flex-shrink:0;font-size:10px;color:var(--tx3);
+}
+#slice-slider{flex:1;accent-color:var(--ac);cursor:pointer}
+#slice-label{min-width:50px;text-align:right;font-family:var(--mono)}
+
+/* ── FILMSTRIP ──────────────────────────────────────────────── */
+.filmstrip{
+  display:flex;gap:4px;padding:6px 8px;
+  overflow-x:auto;
+  background:rgba(8,12,18,.8);
+  border-top:1px solid var(--brd);
+  flex-shrink:0;min-height:0;
+}
+.film-thumb{
+  width:52px;height:52px;border-radius:4px;
+  border:1.5px solid var(--brd);
+  cursor:pointer;overflow:hidden;flex-shrink:0;
+  background:#000;
+  transition:all .12s;
+}
+.film-thumb:hover{border-color:var(--ac2)}
+.film-thumb.active{border-color:var(--ac);box-shadow:0 0 8px rgba(74,158,255,.4)}
+.film-thumb canvas{width:100%;height:100%;display:block;image-rendering:pixelated}
+
+/* ── META CARD ──────────────────────────────────────────────── */
+.meta-card{
+  background:var(--sur);
+  border:1px solid var(--brd);
+  border-radius:var(--r);
+  padding:8px 10px;
+  font-size:11px;
+}
+.meta-card h4{
+  font-size:10px;font-weight:600;color:var(--tx3);
+  text-transform:uppercase;letter-spacing:.7px;
+  margin-bottom:6px;
+}
+.meta-row{display:flex;gap:6px;margin-bottom:3px}
+.meta-lbl{color:var(--tx3);min-width:80px;flex-shrink:0}
+.meta-val{color:var(--tx);font-family:var(--mono)}
+.anon-warn{
+  background:rgba(245,166,35,.08);
+  border:1px solid rgba(245,166,35,.25);
+  border-radius:var(--r);
+  padding:6px 10px;
+  font-size:10px;color:var(--warn);
+  display:flex;align-items:center;gap:6px;
+}
+
+/* ── REPORT PANEL ───────────────────────────────────────────── */
+.rp-hdr{
+  padding:10px 14px;
+  border-bottom:1px solid var(--brd);
+  display:flex;align-items:center;gap:8px;
+  flex-shrink:0;
+  background:rgba(13,17,23,.6);
+}
+.rp-hdr-title{font-size:11px;font-weight:600;color:var(--tx2);text-transform:uppercase;letter-spacing:.8px;flex:1}
+.rp-body{
+  flex:1;min-height:0;
+  overflow-y:auto;
+  padding:12px 14px;
+  display:flex;flex-direction:column;gap:10px;
+}
+.rp-section{
+  background:var(--sur);
+  border:1px solid var(--brd);
+  border-radius:var(--r);
+  overflow:hidden;
+}
+.rp-section-hdr{
+  padding:6px 10px;
+  background:rgba(255,255,255,.03);
+  border-bottom:1px solid var(--brd);
+  font-size:10px;font-weight:600;color:var(--tx3);
+  text-transform:uppercase;letter-spacing:.7px;
+  display:flex;align-items:center;gap:6px;
+}
+.rp-section textarea{
+  width:100%;padding:8px 10px;
+  background:none;border:none;outline:none;
+  color:var(--tx);font-family:var(--mono);font-size:12px;
+  line-height:1.6;resize:vertical;min-height:80px;
+}
+.rp-section textarea::placeholder{color:var(--tx3)}
+
+.ai-section{
+  background:rgba(74,158,255,.04);
+  border:1px solid rgba(74,158,255,.2);
+  border-radius:var(--r);
+  overflow:hidden;
+}
+.ai-section-hdr{
+  padding:6px 10px;
+  background:rgba(74,158,255,.06);
+  border-bottom:1px solid rgba(74,158,255,.2);
+  font-size:10px;font-weight:600;color:var(--ac);
+  text-transform:uppercase;letter-spacing:.7px;
+  display:flex;align-items:center;gap:6px;
+}
+.ai-msg{padding:10px;font-size:12px;color:var(--tx);line-height:1.7;font-family:var(--mono);white-space:pre-wrap}
+.ai-msg.placeholder{color:var(--tx3);font-family:var(--font);font-style:italic}
+.ai-input-row{
+  display:flex;gap:6px;align-items:flex-end;
+  padding:8px;
+  border-top:1px solid rgba(74,158,255,.15);
+  background:rgba(8,12,18,.4);
+}
+.ai-input{
+  flex:1;background:rgba(255,255,255,.04);
+  border:1px solid var(--brd2);border-radius:var(--r);
+  padding:6px 10px;color:var(--tx);font-family:var(--font);font-size:12px;
+  outline:none;resize:none;min-height:34px;max-height:100px;
+}
+.ai-input::placeholder{color:var(--tx3)}
+.ai-input:focus{border-color:rgba(74,158,255,.4)}
+.btn-ai{
+  padding:6px 12px;border-radius:var(--r);border:none;
+  background:var(--ac);color:#fff;font-size:12px;font-weight:600;
+  cursor:pointer;transition:all .15s;flex-shrink:0;
+}
+.btn-ai:hover{background:var(--ac2)}
+.btn-ai:disabled{opacity:.4;cursor:not-allowed}
+.rp-actions{
+  display:flex;gap:6px;flex-wrap:wrap;
+  padding:10px 14px;
+  border-top:1px solid var(--brd);
+  background:rgba(8,12,18,.4);
+  flex-shrink:0;
+}
+.btn-act{
+  padding:5px 12px;border-radius:var(--r);border:1px solid var(--brd2);
+  background:var(--sur2);color:var(--tx2);font-size:11px;font-weight:500;
+  cursor:pointer;transition:all .15s;
+}
+.btn-act:hover{background:var(--brd);color:var(--tx)}
+.btn-act.pri{background:rgba(74,158,255,.15);border-color:rgba(74,158,255,.4);color:var(--ac)}
+.btn-act.pri:hover{background:rgba(74,158,255,.25)}
+.btn-act.gr{background:rgba(0,200,150,.12);border-color:rgba(0,200,150,.35);color:var(--gr)}
+.btn-act.gr:hover{background:rgba(0,200,150,.2)}
+
+/* ── PACS VIEW ──────────────────────────────────────────────── */
+.pacs-layout{
+  display:flex;flex:1;min-height:0;
+  flex-direction:column;
+  padding:16px;gap:12px;
+  overflow-y:auto;
+}
+.pacs-card{
+  background:var(--sur);border:1px solid var(--brd);
+  border-radius:var(--r2);overflow:hidden;
+}
+.pacs-card-hdr{
+  padding:8px 14px;background:rgba(255,255,255,.025);
+  border-bottom:1px solid var(--brd);
+  font-size:11px;font-weight:600;color:var(--tx2);
+  text-transform:uppercase;letter-spacing:.7px;
+  display:flex;align-items:center;gap:8px;
+}
+.pacs-card-body{padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.form-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.form-grp{display:flex;flex-direction:column;gap:3px;flex:1;min-width:140px}
+.form-grp label{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.5px}
+.inp{
+  background:var(--sur2);border:1px solid var(--brd);
+  border-radius:var(--r);padding:5px 8px;
+  color:var(--tx);font-size:12px;outline:none;
+  transition:border-color .15s;
+}
+.inp:focus{border-color:rgba(74,158,255,.5)}
+.inp::placeholder{color:var(--tx3)}
+select.inp{cursor:pointer}
+.status-dot{
+  width:8px;height:8px;border-radius:50%;flex-shrink:0;
+}
+.status-dot.ok{background:var(--gr);box-shadow:0 0 6px var(--gr)}
+.status-dot.err{background:var(--err);box-shadow:0 0 6px var(--err)}
+.status-dot.idle{background:var(--tx3)}
+.pacs-result-table{
+  width:100%;border-collapse:collapse;font-size:11px;
+}
+.pacs-result-table th{
+  padding:6px 10px;text-align:left;
+  font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.5px;
+  border-bottom:1px solid var(--brd);
+}
+.pacs-result-table td{
+  padding:7px 10px;border-bottom:1px solid rgba(30,42,56,.5);
+  color:var(--tx);
+}
+.pacs-result-table tr:hover td{background:rgba(255,255,255,.03)}
+.pacs-result-table tr:last-child td{border-bottom:none}
+#pacs-empty{color:var(--tx3);font-size:12px;text-align:center;padding:20px}
+
+/* ── AUDIT VIEW ─────────────────────────────────────────────── */
+.audit-layout{
+  flex:1;min-height:0;overflow-y:auto;
+  padding:16px;display:flex;flex-direction:column;gap:8px;
+}
+.audit-row{
+  display:flex;gap:10px;align-items:baseline;
+  font-size:11px;padding:6px 10px;
+  background:var(--sur);border:1px solid var(--brd);
+  border-radius:var(--r);
+}
+.audit-time{color:var(--tx3);font-family:var(--mono);min-width:160px;flex-shrink:0}
+.audit-evt{color:var(--tx2)}
+.audit-evt b{color:var(--tx)}
+#audit-empty{color:var(--tx3);font-size:12px;text-align:center;padding:30px}
+
+/* ── TOAST ──────────────────────────────────────────────────── */
+#toast{
+  position:fixed;bottom:20px;right:20px;
+  background:var(--sur2);border:1px solid var(--brd2);
+  border-radius:var(--r2);padding:8px 14px;
+  font-size:12px;color:var(--tx);
+  box-shadow:var(--sha);
+  transform:translateY(80px);opacity:0;
+  transition:all .3s;pointer-events:none;
+  z-index:9999;
+  max-width:300px;
+}
+#toast.show{transform:translateY(0);opacity:1}
+#toast.ok{border-left:3px solid var(--gr)}
+#toast.err{border-left:3px solid var(--err)}
+#toast.warn{border-left:3px solid var(--warn)}
+
+/* ── MODAL ──────────────────────────────────────────────────── */
+.modal-bg{
+  position:fixed;inset:0;background:rgba(0,0,0,.7);
+  backdrop-filter:blur(4px);
+  display:flex;align-items:center;justify-content:center;
+  z-index:1000;
+}
+.modal-bg.hidden{display:none}
+.modal{
+  background:var(--sur);border:1px solid var(--brd2);
+  border-radius:var(--r2);padding:20px;
+  width:min(500px,95vw);box-shadow:var(--sha);
+}
+.modal h3{font-size:14px;color:var(--h1);margin-bottom:12px}
+.modal-body{display:flex;flex-direction:column;gap:10px}
+.modal-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+.btn{
+  padding:6px 16px;border-radius:var(--r);border:1px solid var(--brd2);
+  font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;
+}
+.btn.pri{background:var(--ac);border-color:var(--ac);color:#fff}
+.btn.pri:hover{background:var(--ac2)}
+.btn.sec{background:var(--sur2);color:var(--tx2)}
+.btn.sec:hover{background:var(--brd)}
+
+/* ── STRUCTURED REPORT ──────────────────────────────────────── */
+.struct-grid{
+  display:grid;grid-template-columns:1fr 1fr;gap:8px;
+}
+.struct-field{display:flex;flex-direction:column;gap:3px}
+.struct-field.full{grid-column:1/-1}
+.struct-field label{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.5px}
+.struct-field .inp{font-size:11px}
+.struct-field textarea.inp{resize:vertical;min-height:60px;font-family:var(--font);line-height:1.5}
+
+/* ── SPINNER ────────────────────────────────────────────────── */
+.spin{
+  display:inline-block;width:14px;height:14px;
+  border:2px solid rgba(74,158,255,.2);
+  border-top-color:var(--ac);
+  border-radius:50%;
+  animation:spin .6s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── RESPONSIVE ─────────────────────────────────────────────── */
+@media(max-width:700px){
+  .sp{width:100%;max-width:none;border-right:none;border-bottom:1px solid var(--brd)}
+  .rep-layout{flex-direction:column}
+  .struct-grid{grid-template-columns:1fr}
+}
 </style>
 </head>
 <body>
-<div class="shell">
-<aside class="sidebar">
-  <div class="sb-logo">
-    <div class="wm">NeuroRad<span>Reporter</span></div>
-    <div class="tl">Automatic Neuroradiology Reporting</div>
-  </div>
-  <nav class="nav">
-    <div class="ns">Pipeline</div>
-    <div class="ni active" data-page="anon">
-      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1" y="1" width="5" height="5" rx="1"/><rect x="8" y="1" width="5" height="5" rx="1"/><rect x="1" y="8" width="5" height="5" rx="1"/><rect x="8" y="8" width="5" height="5" rx="1"/></svg>
-      Anonymization <span class="nbadge" id="nb-f">0</span>
+<div id="app">
+
+  <!-- HEADER -->
+  <header id="hdr">
+    <div class="logo-mark">N</div>
+    <div>
+      <div class="logo-txt">NeuroRad Reporter</div>
+      <div class="logo-sub">Radiology4U · AI Reporting Platform</div>
     </div>
-    <div class="ni" data-page="report">
-      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 1h10v12H2z"/><path d="M4 5h6M4 8h4"/></svg>
-      AI Reporting <span class="nbadge g" id="nb-r">0</span>
+    <div class="hdr-spacer"></div>
+    <span class="badge">Beta</span>
+    <!-- API Key saved indicator -->
+    <div id="api-saved-bar" class="hidden" onclick="showKeyBar()">
+      <span class="dot"></span>
+      <span>API Key ✓</span>
     </div>
-    <div class="ni" data-page="audit">
-      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="7" cy="7" r="5.5"/><path d="M7 4.5V7.5l1.5 1"/></svg>
-      Audit log
+    <!-- API Key input bar -->
+    <div id="api-bar">
+      <label>Anthropic Key</label>
+      <input id="api-key-input" type="password" placeholder="sk-ant-…" oninput="onKeyInput()"/>
+      <button class="btn-xs pri" onclick="saveAndHideKey()">Save</button>
+      <button class="btn-xs sec" onclick="clearKey()">Clear</button>
     </div>
-    <div class="ni" data-page="pacs">
-      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1" y="3" width="12" height="9" rx="1.5"/><path d="M4 6h6M4 9h3"/><circle cx="10.5" cy="9" r="1.2"/></svg>
-      PACS Integration <span class="nbadge" id="nb-pacs">10</span>
-    </div>
-    <div class="ns" style="margin-top:6px">Compliance</div>
-    <div class="ni" data-page="compliance">
-      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7 1l4.5 1.8v4.5C11.5 10 9.5 12.2 7 13 4.5 12.2 2.5 10 2.5 7.3V2.8L7 1z"/></svg>
-      EU AI Act / CE / HIPAA
-    </div>
-    <div class="ni" data-page="security">
-      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="5" width="10" height="8" rx="1.5"/><path d="M5 5V3.5a2 2 0 0 1 4 0V5"/><circle cx="7" cy="9" r="1"/></svg>
-      Security
-    </div>
-    <div class="ni" data-page="settings">
-      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="7" cy="7" r="2"/><path d="M7 1v1.5M7 11.5V13M1 7h1.5M11.5 7H13"/></svg>
-      Settings
-    </div>
+  </header>
+
+  <!-- NAV -->
+  <nav id="nav">
+    <button class="tab active" onclick="switchTab('reporting',this)">📋 Reporting</button>
+    <button class="tab" onclick="switchTab('pacs',this)">🔗 PACS / HL7</button>
+    <button class="tab" onclick="switchTab('audit',this)">📝 Audit Log</button>
   </nav>
-  <div class="sb-foot">
-    <strong>v1.0.0-pre</strong> — research only
-    <div class="cb g">EU AI Act ready</div>
-    <div class="cb p" style="margin-top:3px">HIPAA safeguards</div>
-    <div class="cb r" style="margin-top:3px">Not for clinical use</div>
-  </div>
-</aside>
 
-<div style="display:flex;flex-direction:column;flex:1;overflow:hidden">
-  <!-- Research-only banner -->
-  <div style="background:var(--rd);color:#fff;padding:7px 15px;font-size:11px;font-weight:500;display:flex;align-items:center;gap:8px;flex-shrink:0">
-    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6.5 1L12 10.5H1L6.5 1z"/><path d="M6.5 5.5v2.5M6.5 9.5v.3"/></svg>
-    FOR RESEARCH USE ONLY — Not validated for clinical diagnosis. Not CE marked. Not for use in patient care decisions.
-  </div>
-  <!-- API key bar -->
-  <div class="api-bar" id="api-bar">
-    <label>Anthropic API Key</label>
-    <input type="password" id="apikey" placeholder="sk-ant-…" oninput="setApiKey(this.value)" autocomplete="off" spellcheck="false">
-    <button onclick="saveAndHideKey()" style="background:var(--accent,#4f8ef7);color:#fff;border:none;border-radius:6px;padding:5px 13px;font-size:12px;cursor:pointer;font-family:inherit">Save &amp; Remember</button>
-    <span class="api-status unset" id="api-status">Not set</span>
-    <span style="color:var(--t3);font-size:11px">Saved in this browser only — never sent to any server except Anthropic</span>
-  </div>
-  <!-- Collapsed key bar shown when key is already saved -->
-  <div class="api-bar" id="api-bar-saved" style="display:none;justify-content:flex-end;padding:5px 15px;min-height:unset">
-    <span style="color:#34d399;font-size:12px">🔑 API key saved</span>
-    <button onclick="showKeyBar()" style="background:transparent;border:1px solid var(--border-light,#252840);border-radius:5px;color:var(--t3,#6b7494);font-size:11px;padding:3px 10px;cursor:pointer;font-family:inherit;margin-left:10px">Change key</button>
-  </div>
-  <main class="main">
+  <!-- MAIN -->
+  <main id="main">
 
-<!-- ════ ANONYMIZATION ════ -->
-<section class="page active" id="page-anon">
-  <div class="ph"><h1>DICOM Anonymization</h1><p>Drop a DICOM series — files auto-group by <strong>Series Instance UID</strong> and anonymized with SHA-256. Max 200 files per batch. Research use only.</p></div>
-  <div class="ob"><svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7.5 1L13 11.5H2L7.5 1z"/><path d="M7.5 6v3M7.5 10.5v.3"/></svg><div><strong>Human oversight required — Art. 14 EU AI Act (EU) 2024/1689</strong>Outputs must be reviewed by a qualified data protection officer before any use.</div></div>
-  <div class="ob hi"><svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7.5 1l5 2v4.5c0 3-2.5 5.5-5 6.5C5 13.5 2.5 11 2.5 7.5V3l5-2z"/></svg><div><strong>HIPAA — 45 CFR §164.514(b)</strong>SHA-256 satisfies Expert Determination de-identification. All processing is in-browser — no ePHI transmitted to servers.</div></div>
-  <div class="stats">
-    <div class="stat"><div class="sl">Total files</div><div class="sv b" id="s-tot">0</div></div>
-    <div class="stat"><div class="sl">Series detected</div><div class="sv g" id="s-ser">0</div></div>
-    <div class="stat"><div class="sl">Anonymized</div><div class="sv g" id="s-don">0</div></div>
-    <div class="stat"><div class="sl">Errors</div><div class="sv r" id="s-err">0</div></div>
-  </div>
-  <div class="dz" id="dz">
-    <svg viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 24V12M12 18l6-6 6 6"/><rect x="3" y="26" width="30" height="7" rx="2"/></svg>
-    <div class="dzt">Drop DICOM series files here</div>
-    <div class="dzs">Multiple .dcm files — auto-grouped by Series Instance UID &nbsp;·&nbsp; <span class="dzl" id="brl">browse files</span></div>
-    <input type="file" id="fi" multiple accept=".dcm,application/dicom">
-  </div>
-  <div class="card"><div class="ct">Tags anonymized via SHA-256 (HIPAA §164.514 identifiers)</div><div class="tcs" id="tag-chips"></div></div>
-  <div class="tw"><table>
-    <thead><tr>
-      <th style="width:22%">Series description</th><th style="width:10%">Modality</th><th style="width:8%">Slices</th>
-      <th style="width:16%">Series UID</th><th style="width:11%">Status</th><th style="width:16%">Patient hash</th><th style="width:17%">Actions</th>
-    </tr></thead>
-    <tbody id="ser-table"><tr><td colspan="7" class="es">No files imported. Drop a DICOM series above.</td></tr></tbody>
-  </table></div>
-  <div class="brow" style="justify-content:flex-end">
-    <div class="pw" id="pw" style="display:none"><div class="pf" id="pf" style="width:0%"></div></div>
-    <button class="btn btn-s" id="clrBtn" disabled>Clear all</button>
-    <button class="btn btn-p" id="procBtn" disabled>Anonymize all series</button>
-  </div>
-</section>
+    <!-- ── REPORTING VIEW ───────────────────────── -->
+    <div id="view-reporting" class="view active">
+      <div class="rep-layout">
 
-<!-- ════ AI REPORTING ════ -->
-<section class="page" id="page-report">
-  <div class="ph"><h1>Automatic Neuroradiology Reporting</h1><p>Select an anonymized series — key frames stream to Claude vision AI and a structured report appears within ~300ms. No manual findings input required.</p></div>
-  <div class="ob"><svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7.5 1L13 11.5H2L7.5 1z"/><path d="M7.5 6v3M7.5 10.5v.3"/></svg><div><strong>Vision AI — Art. 13 EU AI Act &amp; HIPAA §164.512(i)</strong>Reports are decision-support only — radiologist review mandatory. No ePHI retained after session.</div></div>
-  <div id="api-err" class="err-box" style="display:none"></div>
-  <div class="rep-layout">
-    <div class="sp">
-      <div class="sp-head"><h3>Anonymized series</h3><span style="font-size:11px;color:var(--t3)" id="sc">0 series</span></div>
-      <div class="sl-list" id="sl-list"><div class="sl-empty">No anonymized series yet.</div></div>
-    </div>
-    <div class="rp" id="rp">
-      <div class="rp-head">
-        <h3 id="rp-title">Select a series to begin</h3>
-        <button class="copy-btn" id="copy-btn" style="display:none" id="copy-btn">⎘ Copy</button>
-        <button class="btn btn-g" id="dl-btn" style="display:none;font-size:11px">↓ Download</button>
+        <!-- Study Panel -->
+        <aside class="sp">
+          <div class="sp-hdr">
+            <span class="sp-hdr-title">Study</span>
+            <label class="btn-sm" id="load-btn">Load DICOM</label>
+            <input id="file-input" type="file" accept=".dcm,application/dicom" multiple style="display:none" onchange="loadDICOM(this.files)"/>
+            <button class="btn-sm" onclick="clearStudy()">Clear</button>
+          </div>
+          <div class="sp-body" id="sp-body">
+            <!-- drop zone shown when empty -->
+            <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()"
+                 ondragover="ev.preventDefault();this.classList.add('over')"
+                 ondragleave="this.classList.remove('over')"
+                 ondrop="this.classList.remove('over');ev.preventDefault();loadDICOM(ev.dataTransfer.files)">
+              <div class="drop-icon">🧠</div>
+              <div class="drop-txt"><strong>Drop DICOM files here</strong><br/>or click to browse<br/><span style="color:var(--tx3)">.dcm files supported</span></div>
+            </div>
+
+            <!-- DICOM viewer (initially hidden) -->
+            <div class="viewer-wrap" id="viewer-wrap" style="display:none">
+              <div class="viewer-main" id="viewer-main">
+                <canvas id="main-canvas" class="viewer-canvas"></canvas>
+                <div class="viewer-empty" id="viewer-empty"><div class="viewer-empty-icon">⬛</div><span>No image</span></div>
+                <div class="viewer-overlay">
+                  <span id="ov-topleft"></span>
+                  <span id="ov-topright"></span>
+                </div>
+                <div class="viewer-overlay-br" id="ov-br"></div>
+              </div>
+              <!-- Controls -->
+              <div class="viewer-controls">
+                <button class="vc-btn active" id="btn-brain" onclick="setWindow(40,80,'Brain',this)">Brain</button>
+                <button class="vc-btn" id="btn-bone" onclick="setWindow(400,1500,'Bone',this)">Bone</button>
+                <button class="vc-btn" id="btn-soft" onclick="setWindow(40,400,'Soft',this)">Soft Tissue</button>
+                <button class="vc-btn" id="btn-sub" onclick="setWindow(75,200,'Subdural',this)">Subdural</button>
+                <div class="vc-sep"></div>
+                <button class="vc-btn" onclick="autoWindow()">Auto W/L</button>
+                <button class="vc-btn" onclick="invertToggle()">Invert</button>
+              </div>
+              <!-- Slice slider -->
+              <div class="slice-bar">
+                <span>Slice</span>
+                <input type="range" id="slice-slider" min="0" value="0" oninput="renderSlice(+this.value)"/>
+                <span id="slice-label">1 / 1</span>
+              </div>
+              <!-- Filmstrip -->
+              <div class="filmstrip" id="filmstrip"></div>
+            </div>
+
+            <!-- Meta info -->
+            <div class="meta-card" id="meta-card" style="display:none">
+              <h4>Study Info</h4>
+              <div class="meta-row"><span class="meta-lbl">Patient</span><span class="meta-val" id="mi-patient">—</span></div>
+              <div class="meta-row"><span class="meta-lbl">DOB</span><span class="meta-val" id="mi-dob">—</span></div>
+              <div class="meta-row"><span class="meta-lbl">Study Date</span><span class="meta-val" id="mi-date">—</span></div>
+              <div class="meta-row"><span class="meta-lbl">Modality</span><span class="meta-val" id="mi-modality">—</span></div>
+              <div class="meta-row"><span class="meta-lbl">Series</span><span class="meta-val" id="mi-series">—</span></div>
+              <div class="meta-row"><span class="meta-lbl">Institution</span><span class="meta-val" id="mi-inst">—</span></div>
+              <div class="meta-row"><span class="meta-lbl">Slices</span><span class="meta-val" id="mi-slices">—</span></div>
+            </div>
+
+            <div class="anon-warn" id="anon-warn" style="display:none">
+              ⚠️ <span>Patient identifiers detected. <button class="btn-sm" style="margin-left:4px" onclick="anonymizeAll()">Anonymize All</button></span>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Report Panel -->
+        <section class="rp">
+          <div class="rp-hdr">
+            <span class="rp-hdr-title">Report</span>
+            <button class="btn-sm" onclick="clearReport()">Clear</button>
+            <button class="btn-sm pri" onclick="generateAI()">✨ AI Generate</button>
+          </div>
+          <div class="rp-body" id="rp-body">
+            <!-- Narrative report -->
+            <div class="rp-section">
+              <div class="rp-section-hdr">📄 Narrative Report</div>
+              <textarea id="rp-narrative" placeholder="Free-text narrative report…&#10;&#10;TECHNIQUE: …&#10;FINDINGS: …&#10;IMPRESSION: …" rows="10"></textarea>
+            </div>
+
+            <!-- Structured report -->
+            <div class="rp-section">
+              <div class="rp-section-hdr">📊 Structured Fields</div>
+              <div style="padding:10px">
+                <div class="struct-grid">
+                  <div class="struct-field">
+                    <label>Indication</label>
+                    <input class="inp" id="sf-indication" placeholder="Clinical indication…"/>
+                  </div>
+                  <div class="struct-field">
+                    <label>Technique</label>
+                    <input class="inp" id="sf-technique" placeholder="MRI/CT, contrast…"/>
+                  </div>
+                  <div class="struct-field">
+                    <label>Modality</label>
+                    <select class="inp" id="sf-modality">
+                      <option value="">—</option>
+                      <option>CT</option><option>MRI</option><option>MRA</option>
+                      <option>MRS</option><option>fMRI</option><option>PET-CT</option>
+                      <option>X-Ray</option><option>Ultrasound</option>
+                    </select>
+                  </div>
+                  <div class="struct-field">
+                    <label>Contrast</label>
+                    <select class="inp" id="sf-contrast">
+                      <option value="">—</option>
+                      <option>With contrast</option>
+                      <option>Without contrast</option>
+                      <option>With and without contrast</option>
+                    </select>
+                  </div>
+                  <div class="struct-field full">
+                    <label>Key Findings</label>
+                    <textarea class="inp" id="sf-findings" placeholder="Describe key imaging findings…" rows="3"></textarea>
+                  </div>
+                  <div class="struct-field full">
+                    <label>Impression / Diagnosis</label>
+                    <textarea class="inp" id="sf-impression" placeholder="Clinical impression and recommendations…" rows="3"></textarea>
+                  </div>
+                  <div class="struct-field">
+                    <label>Follow-up</label>
+                    <input class="inp" id="sf-followup" placeholder="None / 3 months / …"/>
+                  </div>
+                  <div class="struct-field">
+                    <label>Urgency</label>
+                    <select class="inp" id="sf-urgency">
+                      <option value="">—</option>
+                      <option>Routine</option>
+                      <option>Semi-urgent (2 weeks)</option>
+                      <option>Urgent (48h)</option>
+                      <option>STAT — notify immediately</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- AI Chat -->
+            <div class="ai-section">
+              <div class="ai-section-hdr">
+                <span class="spin" id="ai-spin" style="display:none"></span>
+                🤖 AI Assistant (Claude)
+              </div>
+              <div class="ai-msg placeholder" id="ai-output">Ask a question about the study, request a differential, or generate a structured report…</div>
+              <div class="ai-input-row">
+                <textarea class="ai-input" id="ai-prompt" placeholder="e.g. List differential diagnoses for these findings…" rows="1"
+                  onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAI()}"></textarea>
+                <button class="btn-ai" id="ai-send-btn" onclick="sendAI()">Send</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Report actions -->
+          <div class="rp-actions">
+            <button class="btn-act" onclick="copyReport()">📋 Copy Narrative</button>
+            <button class="btn-act" onclick="copyStructured()">📋 Copy Structured</button>
+            <button class="btn-act" onclick="exportHL7()">📤 Export HL7 FHIR</button>
+            <button class="btn-act" onclick="exportDicomSR()">📤 DICOM SR</button>
+            <button class="btn-act gr" onclick="finalizeReport()">✅ Finalize & Sign</button>
+          </div>
+        </section>
       </div>
-      <div id="viewer-wrap" class="viewer-wrap" style="display:none">
-        <div class="viewer-main" id="viewer-main">
-          <canvas id="viewer-canvas" class="viewer-canvas"></canvas>
-          <div class="viewer-overlay" id="viewer-overlay-tl"></div>
-          <div class="viewer-overlay-br" id="viewer-overlay-br"></div>
-          <button class="viewer-nav prev" id="viewer-prev">‹</button>
-          <button class="viewer-nav next" id="viewer-next">›</button>
+    </div><!-- /view-reporting -->
+
+    <!-- ── PACS VIEW ──────────────────────────────── -->
+    <div id="view-pacs" class="view">
+      <div class="pacs-layout">
+
+        <!-- Server config -->
+        <div class="pacs-card">
+          <div class="pacs-card-hdr">🔗 PACS / DICOMweb Connection</div>
+          <div class="pacs-card-body">
+            <div class="form-row">
+              <div class="form-grp">
+                <label>PACS Type</label>
+                <select class="inp" id="pacs-type" onchange="renderPACS()">
+                  <option value="orthanc">Orthanc REST</option>
+                  <option value="dicomweb">DICOMweb (QIDO/WADO)</option>
+                  <option value="fhir">HL7 FHIR R4</option>
+                </select>
+              </div>
+              <div class="form-grp" style="flex:2">
+                <label>Server URL</label>
+                <input class="inp" id="pacs-url" placeholder="http://orthanc:8042" value="http://localhost:8042"/>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-grp">
+                <label>Username</label>
+                <input class="inp" id="pacs-user" placeholder="orthanc"/>
+              </div>
+              <div class="form-grp">
+                <label>Password</label>
+                <input class="inp" id="pacs-pass" type="password" placeholder="orthanc"/>
+              </div>
+              <div class="form-grp" style="flex:0;align-self:flex-end">
+                <button class="btn-sm" onclick="testPACS()">Test Connection</button>
+              </div>
+              <div class="form-grp" style="flex:0;align-self:flex-end;display:flex;align-items:center;gap:6px">
+                <div class="status-dot idle" id="pacs-dot"></div>
+                <span id="pacs-status" style="font-size:11px;color:var(--tx3)">Not tested</span>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="viewer-controls">
-          <input type="range" class="viewer-slider" id="viewer-slider" min="0" value="0" step="1">
-          <span class="viewer-slice-lbl" id="viewer-slice-lbl">1 / 1</span>
-          <button class="viewer-ww-btn active" id="ww-brain" data-wc="40" data-ww="80">Brain</button>
-          <button class="viewer-ww-btn" id="ww-stroke" data-wc="35" data-ww="35">Stroke</button>
-          <button class="viewer-ww-btn" id="ww-bone" data-wc="400" data-ww="1800">Bone</button>
-          <button class="viewer-ww-btn" id="ww-auto" data-wc="" data-ww="">Auto</button>
+
+        <!-- Study search -->
+        <div class="pacs-card">
+          <div class="pacs-card-hdr">🔍 Study Search</div>
+          <div class="pacs-card-body">
+            <div class="form-row">
+              <div class="form-grp">
+                <label>Patient Name</label>
+                <input class="inp" id="qs-name" placeholder="Last^First"/>
+              </div>
+              <div class="form-grp">
+                <label>Patient ID</label>
+                <input class="inp" id="qs-id" placeholder=""/>
+              </div>
+              <div class="form-grp">
+                <label>Date (YYYYMMDD)</label>
+                <input class="inp" id="qs-date" placeholder="20240101-20241231"/>
+              </div>
+              <div class="form-grp" style="flex:0;align-self:flex-end">
+                <button class="btn-sm pri" onclick="searchPACS()">Search</button>
+              </div>
+            </div>
+            <div id="pacs-results">
+              <div id="pacs-empty">No results — run a search above</div>
+            </div>
+          </div>
         </div>
-        <div class="filmstrip" id="filmstrip"></div>
+
+        <!-- Export -->
+        <div class="pacs-card">
+          <div class="pacs-card-hdr">📤 Push Report to PACS</div>
+          <div class="pacs-card-body">
+            <p style="font-size:12px;color:var(--tx2)">Send the current finalized report back to the PACS system as HL7 FHIR DiagnosticReport or DICOM SR.</p>
+            <div class="form-row">
+              <button class="btn-sm pri" onclick="pushFHIR()">Push FHIR DiagnosticReport</button>
+              <button class="btn-sm" onclick="pushDicomSR()">Push DICOM SR</button>
+            </div>
+            <div id="push-status" style="font-size:11px;color:var(--tx3)"></div>
+          </div>
+        </div>
+
       </div>
-      <div id="rp-tabs" class="rp-tabs" style="display:none">
-        <button class="rp-tab active" data-tab="rep">Structured report</button>
-        <button class="rp-tab" data-tab="diff">Differentials</button>
-        <button class="rp-tab" data-tab="chat">AI Chat</button>
-        <button class="rp-tab" data-tab="meta">Series metadata</button>
+    </div><!-- /view-pacs -->
+
+    <!-- ── AUDIT VIEW ─────────────────────────────── -->
+    <div id="view-audit" class="view">
+      <div style="padding:10px 16px;border-bottom:1px solid var(--brd);display:flex;align-items:center;gap:8px;flex-shrink:0">
+        <span style="font-size:11px;font-weight:600;color:var(--tx2);text-transform:uppercase;letter-spacing:.8px;flex:1">Audit Trail</span>
+        <button class="btn-sm" onclick="clearAudit()">Clear</button>
+        <button class="btn-sm" onclick="exportAudit()">Export CSV</button>
       </div>
-      <div class="rp-body" id="rp-body">
-        <div class="oe"><div class="oe-ic">⬡</div><p>Select an anonymized series from the left</p><p class="oe-sub">The report starts streaming within ~300ms</p><div class="tip">💡 Frames sampled from central 80% of the series stack — no manual findings input needed.</div></div>
+      <div class="audit-layout" id="audit-log">
+        <div id="audit-empty">No audit events yet</div>
       </div>
-      <div class="disc">⚠ FOR RESEARCH USE ONLY — AI-generated output. Not validated for clinical diagnosis. Mandatory radiologist review required. Not CE marked.</div>
     </div>
-  </div>
-</section>
 
-<!-- ════ AUDIT ════ -->
-<section class="page" id="page-audit">
-  <div class="ph"><h1>Audit log</h1><p>Tamper-evident event record per Art. 12 EU AI Act and HIPAA §164.312(b). Session-persisted — never transmitted.</p></div>
-  <div class="card">
-    <div class="brow" style="margin-bottom:10px;justify-content:space-between"><span style="font-size:12px;color:var(--t3)">All events timestamped — session memory only</span><button class="btn btn-g" id="exportAuditBtn">Export CSV</button></div>
-    <div id="audit-log"></div>
-  </div>
-</section>
+  </main><!-- /main -->
+</div><!-- /app -->
 
-<!-- ════ COMPLIANCE ════ -->
-<section class="page" id="page-compliance">
-  <div class="ph"><h1>EU AI Act, CE marking &amp; HIPAA</h1><p>Compliance status for <strong>NeuroRadReporter v0.9.0-pre</strong> — research-only. Not CE marked. Not validated for clinical use.</p></div>
-  <div style="font-family:'Instrument Serif',serif;font-size:15px;color:var(--t2);margin-bottom:9px;padding-bottom:7px;border-bottom:.5px solid var(--bds)">EU AI Act &amp; CE marking</div>
-  <div class="cg">
-    <div class="cc"><div class="cch"><div class="cci b"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#1A3A5C" stroke-width="1.4"><path d="M7 1l4.5 1.8v4.5C11.5 10 9.5 12.2 7 13 4.5 12.2 2.5 10 2.5 7.3V2.8L7 1z"/></svg></div><div><div class="cct">Risk classification</div><div class="ccs">EU AI Act Annex III + MDR Rule 11</div></div></div>
-      <ul class="cl"><li><span><span class="ar">Art. 6</span>High-risk AI — MDAI with vision analysis of diagnostic imaging</span></li><li><span><span class="ar">MDR</span>MDR Class IIa Rule 11 — vision AI influencing clinical decisions</span></li><li class="w"><span>Notified body assessment required before CE marking — not yet initiated</span></li></ul>
-    </div>
-    <div class="cc"><div class="cch"><div class="cci a"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#7B5E1E" stroke-width="1.4"><circle cx="7" cy="4.5" r="2.5"/><path d="M2.5 12c0-2.5 2-4.5 4.5-4.5s4.5 2 4.5 4.5"/></svg></div><div><div class="cct">Human oversight &amp; transparency</div><div class="ccs">Art. 13 + Art. 14</div></div></div>
-      <ul class="cl"><li><span><span class="ar">Art. 13</span>Model: Claude Sonnet 4 — atlas-trained (Linn/Wiesmann/Brückmann, Springer 2011)</span></li><li><span><span class="ar">Art. 14</span>Report never auto-forwarded — radiologist must review before download</span></li><li class="w"><span>Named oversight roles (radiologist, DPO) required in QMS before deployment</span></li></ul>
-    </div>
-    <div class="cc full"><div class="cch"><div class="cci g"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#2D6A4F" stroke-width="1.4"><circle cx="7" cy="7" r="5.5"/><path d="M7 4.5v3l2 1.5"/></svg></div><div><div class="cct">CE marking timeline</div></div></div>
-      <ul class="ctl">
-        <li class="ctl-i on"><div class="ctl-d">Aug 2025</div><div class="ctl-t">Penalties in force — up to 7% global annual revenue</div></li>
-        <li class="ctl-i up"><div class="ctl-d">Aug 2026</div><div class="ctl-t">Annex III deadline — QMS + notified body assessment required</div></li>
-        <li class="ctl-i up"><div class="ctl-d">Aug 2027</div><div class="ctl-t">Full MDR/IVDR scope — CE marking + EUDAMED registration mandatory</div></li>
-      </ul>
-    </div>
-  </div>
-  <div style="font-family:'Instrument Serif',serif;font-size:15px;color:var(--t2);margin-bottom:9px;padding-bottom:7px;border-bottom:.5px solid var(--bds);margin-top:6px">HIPAA — 45 CFR Parts 160 &amp; 164</div>
-  <div class="cg">
-    <div class="cc"><div class="cch"><div class="cci p"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#4A2D7A" stroke-width="1.4"><path d="M7 1l4.5 1.8v4.5C11.5 10 9.5 12.2 7 13 4.5 12.2 2.5 10 2.5 7.3V2.8L7 1z"/></svg></div><div><div class="cct">De-identification §164.514(b)</div></div></div>
-      <ul class="cl"><li><span><span class="ar h">Expert Det.</span>SHA-256 of all 18 HIPAA identifiers — satisfies Expert Determination method</span></li><li class="w"><span>Salt required + re-identification risk documented before claiming Safe Harbor</span></li></ul>
-    </div>
-    <div class="cc"><div class="cch"><div class="cci p"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#4A2D7A" stroke-width="1.4"><rect x="2" y="4" width="10" height="9" rx="1.5"/><path d="M5 4V3a2 2 0 0 1 4 0v1"/></svg></div><div><div class="cct">Technical &amp; administrative safeguards</div></div></div>
-      <ul class="cl"><li><span><span class="ar h">§164.312(a)</span>API key required for AI processing — access control enforced</span></li><li><span><span class="ar h">§164.312(b)</span>Audit log records all PHI access events</span></li><li><span><span class="ar h">§164.308(b)</span>BAA with Anthropic required before processing US patient ePHI</span></li></ul>
-    </div>
-  </div>
-</section>
-
-<!-- ════ SECURITY ════ -->
-<section class="page" id="page-security">
-  <div class="ph"><h1>Security hardening</h1><p>Threat model and mitigations for NeuroRadReporter v0.9.0-pre. All issues listed below are fixed in this build.</p></div>
-  <div class="cg">
-    <div class="cc"><div class="cch"><div class="cci b"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#1A3A5C" stroke-width="1.4"><rect x="2" y="5" width="10" height="8" rx="1.5"/><path d="M5 5V3.5a2 2 0 0 1 4 0V5"/></svg></div><div><div class="cct">XSS — DICOM metadata injection</div><div class="ccs">Severity: High — Fixed</div></div></div>
-      <ul class="cl"><li><span><span class="ar r">CVE-class</span>DICOM string tags (Series Description, Modality, UID, Body Part, hash) were interpolated raw into innerHTML. A malicious DICOM file with <code>&lt;script&gt;</code> in any string field executed arbitrary JS.</span></li><li><span><span class="ar">Fix</span>All DICOM strings pass through <code>sanitizeText()</code> before DOM insertion. Table rows and series list items are built with <code>textContent</code> assignments, never innerHTML string concatenation.</span></li></ul>
-    </div>
-    <div class="cc"><div class="cch"><div class="cci b"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#1A3A5C" stroke-width="1.4"><path d="M2 1h10v12H2z"/><path d="M4 5h6M4 8h4"/></svg></div><div><div class="cct">XSS — AI report output injection</div><div class="ccs">Severity: High — Fixed</div></div></div>
-      <ul class="cl"><li><span><span class="ar r">CVE-class</span>LLM output was passed to <code>fmtRep()</code> which injected text into innerHTML. A prompt-injected or adversarially crafted report could execute JS in the user's browser.</span></li><li><span><span class="ar">Fix</span><code>fmtRep()</code> now creates DOM nodes and assigns via <code>textContent</code> only. No AI-generated content ever touches innerHTML.</span></li></ul>
-    </div>
-    <div class="cc"><div class="cch"><div class="cci a"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#7B5E1E" stroke-width="1.4"><path d="M7 1L2 4v3c0 3 2.2 5.5 5 6.5 2.8-1 5-3.5 5-6.5V4L7 1z"/><path d="M4.5 7l2 2 3-3"/></svg></div><div><div class="cct">onclick attribute injection via Series UID</div><div class="ccs">Severity: Medium — Fixed</div></div></div>
-      <ul class="cl"><li><span><span class="ar r">INJ</span>Series UIDs were embedded in <code>onclick="openRep('UID')"</code> strings. A UID containing <code>')</code> breaks the attribute boundary and executes arbitrary JS.</span></li><li><span><span class="ar">Fix</span>All onclick attributes removed. Navigation uses <code>data-uid</code> attributes + <code>addEventListener</code>. Event delegation handles all dynamic elements.</span></li></ul>
-    </div>
-    <div class="cc"><div class="cch"><div class="cci a"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#7B5E1E" stroke-width="1.4"><circle cx="7" cy="7" r="5.5"/><path d="M7 4.5v3M7 10v.3"/></svg></div><div><div class="cct">Prototype pollution via DICOM UID</div><div class="ccs">Severity: Medium — Fixed</div></div></div>
-      <ul class="cl"><li><span><span class="ar r">PROTO</span><code>SM[uid] = {...}</code> used a plain object keyed by DICOM UID. A crafted UID of <code>__proto__</code> or <code>constructor</code> polluted Object.prototype for the entire page.</span></li><li><span><span class="ar">Fix</span>Series state uses <code>new Map()</code> — Maps have no prototype chain exposure, so arbitrary string keys are safe.</span></li></ul>
-    </div>
-    <div class="cc"><div class="cch"><div class="cci g"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#2D6A4F" stroke-width="1.4"><path d="M2 2h10v10H2z"/><path d="M5 7l2 2 3-3"/></svg></div><div><div class="cct">Subresource integrity (SRI)</div><div class="ccs">Severity: Low — Fixed</div></div></div>
-      <ul class="cl"><li><span><span class="ar r">SRI</span>dicom-parser loaded from jsDelivr CDN without an <code>integrity=</code> hash. A CDN compromise would silently deliver malicious code with full DOM and memory access.</span></li><li><span><span class="ar">Fix</span><code>integrity="sha384-..."</code> and <code>crossorigin="anonymous"</code> added to the script tag. Browser rejects the script if the hash doesn't match.</span></li></ul>
-    </div>
-    <div class="cc"><div class="cch"><div class="cci g"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#2D6A4F" stroke-width="1.4"><path d="M7 1l4.5 1.8v4.5C11.5 10 9.5 12.2 7 13 4.5 12.2 2.5 10 2.5 7.3V2.8L7 1z"/></svg></div><div><div class="cct">Content Security Policy</div><div class="ccs">Severity: Low — Fixed</div></div></div>
-      <ul class="cl"><li><span><span class="ar r">CSP</span>No CSP meant any injected script could exfiltrate data (API key, patient hashes, report content) to arbitrary external origins.</span></li><li><span><span class="ar">Fix</span>CSP meta tag: <code>connect-src</code> limited to <code>api.anthropic.com</code> only. <code>object-src none</code>, <code>base-uri self</code>. Blocks data exfiltration to unknown origins.</span></li></ul>
-    </div>
-    <div class="cc"><div class="cch"><div class="cci g"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#2D6A4F" stroke-width="1.4"><path d="M2 4h10M2 7h10M2 10h5"/></svg></div><div><div class="cct">File size / memory DoS</div><div class="ccs">Severity: Medium — Fixed</div></div></div>
-      <ul class="cl"><li><span><span class="ar r">DoS</span>No limit on file count or size. Dropping thousands of large DICOM files exhausted browser memory and crashed the tab.</span></li><li><span><span class="ar">Fix</span>Hard limits enforced at import: max 200 files per batch, max 200 MB per file. Excess files are rejected with a clear error message.</span></li></ul>
-    </div>
-    <div class="cc"><div class="cch"><div class="cci t"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#1B5E52" stroke-width="1.4"><circle cx="7" cy="7" r="5.5"/><path d="M7 4.5v3M7 10v.3"/></svg></div><div><div class="cct">API key scope</div><div class="ccs">Severity: Low — Mitigated</div></div></div>
-      <ul class="cl"><li><span><span class="ar r">INFO</span>API key was a global <code>let</code> variable, readable from the browser console by any injected script.</span></li><li><span><span class="ar">Fix</span>Key is now scoped inside an IIFE — not accessible as a global. Residual risk: key remains readable from browser memory inspector (inherent to client-side use — document in threat model and require key rotation after sessions).</span></li></ul>
-    </div>
-  </div>
-</section>
-
-<!-- ════ PACS INTEGRATION ════ -->
-<section class="page" id="page-pacs">
-  <div class="ph"><h1>PACS Integration</h1><p>Export reports to your imaging system or import studies for reporting. Supports 10 systems across open-source and enterprise PACS, FHIR, and EHR platforms.</p></div>
-  <div class="ob"><svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7.5 1L13 11.5H2L7.5 1z"/><path d="M7.5 6v3M7.5 10.5v.3"/></svg><div><strong>HIPAA §164.308(b) — Business Associate Agreement</strong>A BAA with your PACS vendor is required before transmitting ePHI. Credentials are session-only — never persisted to disk.</div></div>
-  <div id="pacs-root"></div>
-</section>
-
-<!-- ════ SETTINGS ════ -->
-<section class="page" id="page-settings">
-  <div class="ph"><h1>Settings</h1></div>
-  <div class="card"><div class="ct">Vision AI frame sampling</div>
-    <div class="srow"><div><div class="srl">Frames sent per series</div><div class="srd">Evenly sampled from central 80% of stack. More = better coverage, slower.</div></div>
-      <select id="frame-count" style="font-family:'DM Sans',sans-serif;padding:5px 8px;border:.5px solid var(--bds);border-radius:var(--rs);font-size:13px;background:var(--sur)">
-        <option value="2" selected>2 frames (fastest)</option><option value="4">4 frames</option><option value="6">6 frames</option><option value="8">8 frames</option>
-      </select>
-    </div>
-  </div>
-  <div class="card"><div class="ct">Security &amp; compliance</div>
-    <div class="srow"><div><div class="srl">Research-only banner</div><div class="srd">Persistent red banner — cannot be disabled in this build</div></div><label class="tog"><input type="checkbox" checked disabled><div class="tog-t"></div><div class="tog-th"></div></label></div>
-    <div class="srow"><div><div class="srl">Session-only data retention</div><div class="srd">HIPAA §164.310(d) — all data cleared on page close</div></div><label class="tog"><input type="checkbox" checked disabled><div class="tog-t"></div><div class="tog-th"></div></label></div>
-    <div class="srow"><div><div class="srl">Content Security Policy</div><div class="srd">connect-src restricted to api.anthropic.com only — cannot be disabled</div></div><label class="tog"><input type="checkbox" checked disabled><div class="tog-t"></div><div class="tog-th"></div></label></div>
-  </div>
-</section>
-
-  </main>
-</div>
-</div>
-<div class="toast" id="toast"></div>
-<canvas id="offscreen" style="display:none;position:absolute;left:-9999px;top:-9999px"></canvas>
+<!-- TOAST -->
+<div id="toast"></div>
 
 <script>
-/* ══════════════════════════════════════════════════════
-   ALL APPLICATION LOGIC WRAPPED IN IIFE
-   — prevents global scope pollution
-   — API_KEY not accessible from console
-══════════════════════════════════════════════════════ */
 (function(){
 'use strict';
 
-/* ── SECURITY: sanitize ALL strings before DOM insertion ── */
-function sanitizeText(str){
-  if(str===null||str===undefined) return '';
-  // Return plain string — callers must use textContent, never innerHTML
-  return String(str).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g,''); // strip control chars
-}
+/* ── STATE ─────────────────────────────────────────────────── */
+let slices=[], currentSlice=0, wc=40, ww=80, inverted=false;
+let auditLog=[], pacsResults=[];
+let apiKey='';
 
-/* ── API KEY — localStorage persistence ── */
-let _apiKey='';
-function setApiKey(v){
-  _apiKey=v.trim();
-  const el=document.getElementById('api-status');
-  if(el){ el.textContent=_apiKey?'Set ✓':'Not set'; el.className='api-status '+(_apiKey?'set':'unset'); }
-  if(_apiKey) audit('API key configured','ok');
-}
-function saveAndHideKey(){
-  const input=document.getElementById('apikey');
-  if(!input||!input.value.trim()){ alert('Please enter your API key first.'); return; }
-  setApiKey(input.value);
-  try{ localStorage.setItem('nrr_api_key', _apiKey); } catch(e){}
-  document.getElementById('api-bar').style.display='none';
-  document.getElementById('api-bar-saved').style.display='flex';
-}
-function showKeyBar(){
-  document.getElementById('api-bar-saved').style.display='none';
-  document.getElementById('api-bar').style.display='flex';
-  const input=document.getElementById('apikey');
-  if(input){ input.value=_apiKey; input.focus(); }
-}
+/* ── INIT ──────────────────────────────────────────────────── */
+document.getElementById('load-btn').onclick=()=>document.getElementById('file-input').click();
+
+window.ondragover=e=>e.preventDefault();
+window.ondrop=e=>{e.preventDefault();loadDICOM(e.dataTransfer.files)};
+
+loadSavedKey();
+addAudit('System','Application started');
+
+/* ── API KEY ────────────────────────────────────────────────── */
 function loadSavedKey(){
   try{
-    const saved=localStorage.getItem('nrr_api_key');
-    if(saved && saved.startsWith('sk-ant')){
-      setApiKey(saved);
-      const input=document.getElementById('apikey');
-      if(input) input.value=saved;
-      document.getElementById('api-bar').style.display='none';
-      document.getElementById('api-bar-saved').style.display='flex';
+    const k=localStorage.getItem('nrr_api_key');
+    if(k&&k.startsWith('sk-')){
+      apiKey=k;
+      document.getElementById('api-key-input').value=k;
+      document.getElementById('api-bar').classList.add('hidden');
+      document.getElementById('api-saved-bar').classList.remove('hidden');
     }
-  } catch(e){}
+  }catch(e){}
 }
-window.setApiKey=setApiKey;
-window.saveAndHideKey=saveAndHideKey;
-window.showKeyBar=showKeyBar;
+window.saveAndHideKey=function(){
+  const v=document.getElementById('api-key-input').value.trim();
+  if(!v.startsWith('sk-')){toast('Enter a valid Anthropic API key (starts with sk-)','err');return;}
+  apiKey=v;
+  try{localStorage.setItem('nrr_api_key',v);}catch(e){}
+  document.getElementById('api-bar').classList.add('hidden');
+  document.getElementById('api-saved-bar').classList.remove('hidden');
+  toast('API key saved','ok');
+  addAudit('Auth','API key saved to localStorage');
+};
+window.showKeyBar=function(){
+  document.getElementById('api-saved-bar').classList.add('hidden');
+  document.getElementById('api-bar').classList.remove('hidden');
+};
+window.clearKey=function(){
+  apiKey='';
+  document.getElementById('api-key-input').value='';
+  try{localStorage.removeItem('nrr_api_key');}catch(e){}
+  document.getElementById('api-bar').classList.remove('hidden');
+  document.getElementById('api-saved-bar').classList.add('hidden');
+  toast('API key cleared','warn');
+};
+window.onKeyInput=function(){
+  const v=document.getElementById('api-key-input').value.trim();
+  if(v.startsWith('sk-'))apiKey=v;
+};
 
-/* ── NAV — data-page / addEventListener, no onclick attributes ── */
-function showPage(id){
-  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.ni').forEach(n=>n.classList.remove('active'));
-  const pg=document.getElementById('page-'+id);
-  if(pg) pg.classList.add('active');
-  document.querySelectorAll('.ni[data-page="'+id+'"]').forEach(n=>n.classList.add('active'));
+/* ── TAB SWITCHING ─────────────────────────────────────────── */
+window.switchTab=function(id,btn){
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('view-'+id).classList.add('active');
+  btn.classList.add('active');
+  addAudit('Nav','Switched to tab: '+id);
+};
+
+/* ── TOAST ─────────────────────────────────────────────────── */
+let _toastTimer;
+function toast(msg,type='ok'){
+  const el=document.getElementById('toast');
+  el.textContent=msg;
+  el.className='show '+(type||'ok');
+  clearTimeout(_toastTimer);
+  _toastTimer=setTimeout(()=>el.className='',3000);
 }
-document.querySelectorAll('.ni[data-page]').forEach(ni=>{
-  ni.addEventListener('click',()=>showPage(ni.dataset.page));
-});
 
-/* ── TOAST ── */
-function toast(msg,d=2600){
-  const t=document.getElementById('toast');
-  t.textContent=msg; // textContent, never innerHTML
-  t.classList.add('show');
-  setTimeout(()=>t.classList.remove('show'),d);
+/* ── AUDIT ─────────────────────────────────────────────────── */
+function addAudit(category,msg){
+  const ts=new Date().toISOString();
+  auditLog.push({ts,category,msg});
+  const cont=document.getElementById('audit-log');
+  const emp=document.getElementById('audit-empty');
+  if(emp)emp.style.display='none';
+  const row=document.createElement('div');
+  row.className='audit-row';
+  row.innerHTML=`<span class="audit-time">${ts}</span><span class="audit-evt"><b>[${category}]</b> ${sanitizeText(msg)}</span>`;
+  cont.appendChild(row);
 }
+window.clearAudit=function(){
+  auditLog=[];
+  const cont=document.getElementById('audit-log');
+  cont.innerHTML='<div id="audit-empty">No audit events yet</div>';
+  addAudit('System','Audit log cleared');
+};
+window.exportAudit=function(){
+  const rows=['Timestamp,Category,Message',...auditLog.map(r=>`"${r.ts}","${r.category}","${r.msg.replace(/"/g,'""')}"`)];
+  download('audit_log.csv',rows.join('\n'),'text/csv');
+  addAudit('Export','Audit log exported as CSV');
+};
 
-/* ── AUDIT ── */
-const AE=[];
-function audit(msg,lv='info'){
-  const time=new Date().toTimeString().slice(0,8);
-  // msg is internal-only (not from DICOM/AI) so safe to use as text
-  AE.unshift({time,msg,lv});
-  const el=document.getElementById('audit-log');
-  if(!el) return;
-  el.innerHTML=''; // clear
-  AE.slice(0,120).forEach(e=>{
-    const row=document.createElement('div');
-    row.className='ae';
-    const t=document.createElement('div');t.className='at2';t.textContent=e.time;
-    const m=document.createElement('div');m.className='am2';m.textContent=e.msg;
-    const l=document.createElement('div');l.className='alv '+e.lv;l.textContent=e.lv.toUpperCase();
-    row.appendChild(t);row.appendChild(m);row.appendChild(l);
-    el.appendChild(row);
+/* ── DICOM LOADING ─────────────────────────────────────────── */
+window.loadDICOM=function(files){
+  if(!files||!files.length)return;
+  slices=[];currentSlice=0;
+  const arr=Array.from(files).sort((a,b)=>a.name.localeCompare(b.name));
+  let loaded=0;
+  arr.forEach(f=>{
+    const fr=new FileReader();
+    fr.onload=e=>{
+      const buf=e.target.result;
+      const entry=parseDICOM(buf,f.name);
+      slices.push(entry);
+      loaded++;
+      if(loaded===arr.length){
+        slices.sort((a,b)=>(a.instanceNum||0)-(b.instanceNum||0));
+        showViewer();
+        renderSlice(0);
+        buildFilmstrip();
+        populateMeta();
+        addAudit('Load',`Loaded ${slices.length} DICOM file(s)`);
+        toast(`Loaded ${slices.length} image(s)`,'ok');
+      }
+    };
+    fr.readAsArrayBuffer(f);
   });
-}
+};
 
-document.getElementById('exportAuditBtn').addEventListener('click',()=>{
-  const csv='time,level,message\n'+AE.map(e=>`"${e.time}","${e.lv}","${e.msg.replace(/"/g,'""')}"`).join('\n');
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
-  a.download=`nrr-audit-${Date.now()}.csv`;
-  a.click();
-});
+/* ── DICOM PARSER ───────────────────────────────────────────── */
+function parseDICOM(buf,fname){
+  const dv=new DataView(buf);
+  const bytes=new Uint8Array(buf);
+  let littleEndian=true;
 
-audit('NeuroRadReporter v0.9.0-pre — research use only','info');
-audit('Security hardening active: XSS sanitization, SRI, CSP, Map(), IIFE scope','ok');
-audit('HIPAA safeguards active — session-only memory','ok');
-audit('EU AI Act compliance module active','ok');
+  function u16(off){try{return dv.getUint16(off,littleEndian)}catch{return 0}}
+  function u32(off){try{return dv.getUint32(off,littleEndian)}catch{return 0}}
+  function str(off,len){try{return new TextDecoder().decode(bytes.slice(off,off+len)).replace(/\0|\s+$/g,'').trim()}catch{return ''}}
 
-/* ── DICOM TAGS ── */
-const ANON_TAGS=[
-  {tag:'x00100010',label:'Patient name'},{tag:'x00100020',label:'Patient ID'},
-  {tag:'x00100030',label:'Date of birth'},{tag:'x00100040',label:'Patient sex'},
-  {tag:'x00101000',label:'Other patient IDs'},{tag:'x00080050',label:'Accession number'},
-  {tag:'x00080090',label:'Referring physician'},{tag:'x00080080',label:'Institution name'},
-  {tag:'x00102110',label:'Allergies'},{tag:'x00101040',label:'Patient address'},
-  {tag:'x00102297',label:'Responsible person'},{tag:'x00100050',label:'Insurance plan'},
-  {tag:'x00101090',label:'Medical record #'},{tag:'x00400275',label:'Request attributes'},
-];
-const tchips=document.getElementById('tag-chips');
-ANON_TAGS.forEach(t=>{
-  const c=document.createElement('span');
-  c.className='tc';
-  c.textContent=t.label; // textContent always
-  tchips.appendChild(c);
-});
-
-/* ── STATE — Map() prevents prototype pollution ── */
-const SM=new Map(); // Map<uid, seriesObj>
-let activeUID=null, activeTab='rep';
-
-/* ── DICOM READERS ── */
-function dcmUint16(ds,tag,def=0){try{const v=ds.uint16(tag);return(v===undefined||v===null)?def:v}catch{return def}}
-function dcmFloat(ds,tag,def=null){try{let v=null;try{v=ds.floatString(tag)}catch{try{v=ds.float(tag)}catch{}}return(v===undefined||v===null||isNaN(v))?def:v}catch{return def}}
-function dcmStr(ds,tag,def=null){try{const v=ds.string(tag);return(v===undefined||v===null||v.trim()==='')?def:sanitizeText(v.trim())}catch{return def}}
-
-async function sha256(s){
-  if(!s) return null;
-  const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s));
-  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
-}
-
-/* ── FILE LIMITS (DoS prevention) ── */
-const MAX_FILES=200;
-const MAX_FILE_BYTES=200*1024*1024; // 200 MB per file
-
-/* ── IMPORT ── */
-const dz=document.getElementById('dz');
-dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('over')});
-dz.addEventListener('dragleave',()=>dz.classList.remove('over'));
-dz.addEventListener('drop',async e=>{e.preventDefault();dz.classList.remove('over');await importFiles(Array.from(e.dataTransfer.files))});
-dz.addEventListener('click',e=>{if(e.target.id!=='brl')document.getElementById('fi').click()});
-document.getElementById('brl').addEventListener('click',()=>document.getElementById('fi').click());
-document.getElementById('fi').addEventListener('change',async e=>{await importFiles(Array.from(e.target.files));e.target.value=''});
-document.getElementById('clrBtn').addEventListener('click',clearAll);
-document.getElementById('procBtn').addEventListener('click',processAll);
-
-async function importFiles(list){
-  // DoS: enforce file count limit
-  const existing=Array.from(SM.values()).reduce((a,s)=>a+s.files.length,0);
-  const allowed=list.slice(0,MAX_FILES-existing);
-  const rejected=list.length-allowed.length;
-  if(rejected>0) toast(`${rejected} file${rejected>1?'s':''} rejected — max ${MAX_FILES} files per session`);
-
-  let added=0;
-  for(const file of allowed){
-    // DoS: enforce file size limit
-    if(file.size>MAX_FILE_BYTES){
-      audit(`Rejected: ${sanitizeText(file.name)} — exceeds 200 MB limit`,'warn');
-      continue;
-    }
-    const ab=await file.arrayBuffer();
-    const byteArray=new Uint8Array(ab);
-    let ds=null;
-    let uid='no-uid-'+Math.random().toString(36).slice(2,8);
-    let desc='Unknown',mod='?',bodyPart=null,pid=null,inst=0,sloc=0;
-    try{
-      ds=dicomParser.parseDicom(byteArray);
-      // All dcmStr results are sanitized inside dcmStr()
-      uid=dcmStr(ds,'x0020000e')||uid;
-      desc=dcmStr(ds,'x0008103e')||dcmStr(ds,'x00180024')||dcmStr(ds,'x00181030')||dcmStr(ds,'x00080060')||'Unknown';
-      mod=dcmStr(ds,'x00080060')||'?';
-      bodyPart=dcmStr(ds,'x00180015');
-      pid=dcmStr(ds,'x00100020');
-      inst=parseInt(dcmStr(ds,'x00200013')||'0')||0;
-      sloc=dcmFloat(ds,'x00201041',0);
-    }catch(e){audit(`Parse warning: ${sanitizeText(file.name)}  — ${sanitizeText(e.message)}`,'warn')}
-
-    if(!SM.has(uid)) SM.set(uid,{uid,desc,mod,bodyPart,pid,files:[],status:'pending',hash:null,meta:{},report:null,diff:null});
-    SM.get(uid).files.push({name:sanitizeText(file.name),byteArray,ds,inst,sloc});
-    added++;
-  }
-  SM.forEach(s=>s.files.sort((a,b)=>a.inst-b.inst||a.sloc-b.sloc));
-  updateUI();
-  audit(`${added} file${added>1?'s':''} imported — ${SM.size} series grouped`,'info');
-  toast(`${added} files — ${SM.size} series`);
-}
-
-/* ── UI ── */
-function updateUI(){
-  const sv=[...SM.values()];
-  const tf=sv.reduce((a,s)=>a+s.files.length,0);
-  const dn=sv.filter(s=>s.status==='done').length;
-  const er=sv.filter(s=>s.status==='error').length;
-  document.getElementById('s-tot').textContent=tf;
-  document.getElementById('s-ser').textContent=sv.length;
-  document.getElementById('s-don').textContent=dn;
-  document.getElementById('s-err').textContent=er;
-  document.getElementById('nb-f').textContent=tf;
-  document.getElementById('nb-r').textContent=sv.filter(s=>s.report).length;
-  document.getElementById('procBtn').disabled=!sv.length||sv.every(s=>s.status!=='pending');
-  document.getElementById('clrBtn').disabled=!sv.length;
-  const prog=sv.length?Math.round((dn+er)/sv.length*100):0;
-  document.getElementById('pw').style.display=sv.length?'':'none';
-  document.getElementById('pf').style.width=prog+'%';
-  renderSerTable();
-  renderSerList();
-}
-
-/* ── SERIES TABLE — DOM-built, no innerHTML string concat ── */
-function renderSerTable(){
-  const tb=document.getElementById('ser-table');
-  tb.innerHTML='';
-  const sv=[...SM.values()];
-  if(!sv.length){
-    const tr=document.createElement('tr');
-    const td=document.createElement('td');td.colSpan=7;td.className='es';td.textContent='No files imported. Drop a DICOM series above.';
-    tr.appendChild(td);tb.appendChild(tr);return;
-  }
-  const BADGES={pending:'badge bp',processing:'badge bpr',done:'badge bd2',error:'badge be'};
-  sv.forEach(s=>{
-    const tr=document.createElement('tr');
-    // desc
-    const tdDesc=document.createElement('td');tdDesc.title=s.desc;tdDesc.textContent=s.desc;
-    // mod
-    const tdMod=document.createElement('td');tdMod.textContent=s.mod;
-    // slices
-    const tdSl=document.createElement('td');tdSl.textContent=s.files.length;
-    // uid
-    const tdUid=document.createElement('td');
-    const uidSpan=document.createElement('span');uidSpan.className='mc';
-    uidSpan.title=s.uid;uidSpan.textContent=(s.uid.length>16?'…'+s.uid.slice(-13):s.uid);
-    tdUid.appendChild(uidSpan);
-    // status
-    const tdSt=document.createElement('td');
-    const badge=document.createElement('span');badge.className=BADGES[s.status]||'badge';
-    badge.textContent={pending:'Pending',processing:'Processing…',done:'Done',error:'Error'}[s.status]||'';
-    tdSt.appendChild(badge);
-    // hash
-    const tdH=document.createElement('td');
-    if(s.hash){const hspan=document.createElement('span');hspan.className='mc';hspan.title=s.hash;hspan.textContent=s.hash.slice(0,16)+'…';tdH.appendChild(hspan);}
-    else{tdH.textContent='—';tdH.style.color='var(--t3)';tdH.style.fontSize='11px';}
-    // action — data-uid, no onclick attr
-    const tdAct=document.createElement('td');
-    if(s.status==='done'){
-      const btn=document.createElement('button');
-      btn.className='btn btn-g';btn.style.fontSize='11px';btn.style.padding='4px 8px';
-      btn.textContent='Report ↗';btn.dataset.uid=s.uid;
-      btn.addEventListener('click',()=>openRep(s.uid));
-      tdAct.appendChild(btn);
-    }
-    tr.appendChild(tdDesc);tr.appendChild(tdMod);tr.appendChild(tdSl);tr.appendChild(tdUid);
-    tr.appendChild(tdSt);tr.appendChild(tdH);tr.appendChild(tdAct);
-    tb.appendChild(tr);
-  });
-}
-
-/* ── SERIES LIST — DOM-built ── */
-function renderSerList(){
-  const list=document.getElementById('sl-list');
-  list.innerHTML='';
-  const sv=[...SM.values()].filter(s=>s.status==='done');
-  document.getElementById('sc').textContent=sv.length+' series';
-  if(!sv.length){
-    const emp=document.createElement('div');emp.className='sl-empty';
-    emp.textContent='No anonymized series yet. Complete anonymization first.';
-    list.appendChild(emp);return;
-  }
-  sv.forEach(s=>{
-    const item=document.createElement('div');
-    item.className='si'+(activeUID===s.uid?' active':'');
-    item.dataset.uid=s.uid;
-    // title
-    const title=document.createElement('div');title.className='si-t';title.textContent=s.desc;
-    // meta
-    const meta=document.createElement('div');meta.className='si-m';
-    const mMod=document.createElement('span');mMod.textContent=s.mod;
-    const mSl=document.createElement('span');mSl.textContent=s.files.length+' slices';
-    meta.appendChild(mMod);meta.appendChild(mSl);
-    if(s.bodyPart){const mBp=document.createElement('span');mBp.textContent=s.bodyPart;meta.appendChild(mBp);}
-    // status badge
-    const status=document.createElement('div');status.className='si-s';
-    const sbadge=document.createElement('span');
-    sbadge.className=s.report?'badge brp':'badge bp';
-    sbadge.textContent=s.report?'Report ready':'Not reported';
-    status.appendChild(sbadge);
-    item.appendChild(title);item.appendChild(meta);item.appendChild(status);
-    item.addEventListener('click',()=>selectSeries(s.uid));
-    list.appendChild(item);
-  });
-}
-
-/* ── ANONYMIZE ── */
-async function processAll(){
-  document.getElementById('procBtn').disabled=true;
-  document.getElementById('clrBtn').disabled=true;
-  const pending=[...SM.values()].filter(s=>s.status==='pending');
-  audit(`Anonymization batch started — ${pending.length} series`,'info');
-  for(const s of pending){
-    s.status='processing';updateUI();await new Promise(r=>setTimeout(r,10));
-    try{
-      const f=s.files[0];
-      s.hash=await sha256(dcmStr(f.ds,'x00100020')||dcmStr(f.ds,'x00100010')||s.uid);
-      s.meta={
-        mod:s.mod,desc:s.desc,bodyPart:s.bodyPart,slices:s.files.length,uid:s.uid,
-        tr:dcmFloat(f.ds,'x00180080'),te:dcmFloat(f.ds,'x00180081'),
-        flip:dcmFloat(f.ds,'x00181314'),studyDate:dcmStr(f.ds,'x00080020'),
-        seq:dcmStr(f.ds,'x00180024'),proto:dcmStr(f.ds,'x00181030'),
-        manufacturer:dcmStr(f.ds,'x00080070'),fieldStrength:dcmFloat(f.ds,'x00180087'),
-      };
-      s.status='done';
-      audit(`Anonymized: ${s.desc} — ${s.files.length} slices`,'ok');
-    }catch(e){
-      s.status='error';
-      audit(`Error: ${s.desc} — ${sanitizeText(e.message)}`,'warn');
-    }
-    updateUI();
-  }
-  document.getElementById('clrBtn').disabled=false;
-  const dn=[...SM.values()].filter(s=>s.status==='done').length;
-  audit(`Batch complete — ${dn} series anonymized`,'ok');
-  toast(`Done — ${dn} series ready`);
-}
-
-function clearAll(){
-  SM.clear();activeUID=null;updateUI();resetRp();
-  audit('All series cleared from memory','info');toast('Cleared');
-}
-
-/* ── PIXEL EXTRACTION ── */
-function sliceToB64(entry){
-  return new Promise(resolve=>{
-    try{
-      const ds=entry.ds;if(!ds){resolve(null);return}
-      const pe=ds.elements.x7fe00010;if(!pe){resolve(null);return}
-      const rows=dcmUint16(ds,'x00280010');const cols=dcmUint16(ds,'x00280011');
-      if(!rows||!cols){resolve(null);return}
-      const bitsAlloc=dcmUint16(ds,'x00280100',16);
-      const pixRep=dcmUint16(ds,'x00280103',0);
-      const slope=dcmFloat(ds,'x00281053',1);
-      const intercept=dcmFloat(ds,'x00281052',0);
-      let wc=dcmFloat(ds,'x00281050',null);let ww=dcmFloat(ds,'x00281051',null);
-      const ba=entry.byteArray;const offset=pe.dataOffset;const needed=rows*cols;
-      if(offset+needed*(bitsAlloc===16?2:1)>ba.length){resolve(null);return}
-      let pixels;
-      if(bitsAlloc===16){
-        const absOffset=ba.byteOffset+offset;
-        if(absOffset%2!==0){
-          const buf=new ArrayBuffer(needed*2);
-          new Uint8Array(buf).set(ba.subarray(offset,offset+needed*2));
-          pixels=pixRep===1?new Int16Array(buf):new Uint16Array(buf);
-        } else {
-          pixels=pixRep===1?new Int16Array(ba.buffer,absOffset,needed):new Uint16Array(ba.buffer,absOffset,needed);
+  // find tag
+  function findTag(group,element){
+    for(let i=132;i<buf.byteLength-8;i+=2){
+      try{
+        const g=dv.getUint16(i,true);
+        const e=dv.getUint16(i+2,true);
+        if(g===group&&e===element){
+          const vr=str(i+4,2);
+          let len,valOff;
+          if(['OB','OW','SQ','UN','UC','UR','UT'].includes(vr)){
+            len=dv.getUint32(i+8,true);valOff=i+12;
+          } else {
+            len=dv.getUint16(i+6,true);valOff=i+8;
+          }
+          return {off:valOff,len};
         }
-      } else if(bitsAlloc===8){
-        pixels=new Uint8Array(ba.buffer,ba.byteOffset+offset,needed);
-      } else {resolve(null);return}
-      if(wc===null||ww===null||ww<=0){
-        let mn=Infinity,mx=-Infinity;
-        for(let i=0;i<pixels.length;i++){const v=pixels[i]*slope+intercept;if(v<mn)mn=v;if(v>mx)mx=v;}
-        ww=mx-mn||1;wc=mn+ww/2;
-      }
-      const lo=wc-ww/2,range=ww||1;
-      const canvas=document.getElementById('offscreen');
-      canvas.width=cols;canvas.height=rows;
-      const ctx=canvas.getContext('2d');
-      const imgData=ctx.createImageData(cols,rows);const d=imgData.data;
-      for(let i=0;i<needed;i++){
-        const hu=pixels[i]*slope+intercept;
-        let v=Math.round(((hu-lo)/range)*255);v=v<0?0:v>255?255:v;
-        const p=i<<2;d[p]=v;d[p+1]=v;d[p+2]=v;d[p+3]=255;
-      }
-      ctx.putImageData(imgData,0,0);
-      const out=document.createElement('canvas');out.width=128;out.height=128;
-      out.getContext('2d').drawImage(canvas,0,0,128,128);
-      resolve(out.toDataURL('image/jpeg',0.6).split(',')[1]);
-    }catch(e){
-      resolve(null);
+      }catch{}
     }
-  });
-}
-
-/* ── KEY FRAMES ── */
-function keyFrames(s){
-  const n=parseInt(document.getElementById('frame-count').value)||2;
-  const total=s.files.length;
-  if(total<=n)return[...Array(total).keys()];
-  const start=Math.floor(total*0.1),end=Math.floor(total*0.9),span=end-start;
-  const idx=[];
-  for(let i=0;i<n;i++)idx.push(start+Math.round(i*(span-1)/Math.max(n-1,1)));
-  return[...new Set(idx)];
-}
-
-/* ── THUMBNAILS ── */
-/* ── DICOM VIEWER ── */
-let _vState={series:null,idx:0,wc:40,ww:80,autoWw:true,b64cache:new Map()};
-
-function renderSlice(idx){
-  const s=_vState.series;if(!s||!s.files[idx])return;
-  _vState.idx=idx;
-  const cv=document.getElementById('viewer-canvas');if(!cv)return;
-  const sl=document.getElementById('viewer-slice-lbl');
-  const slider=document.getElementById('viewer-slider');
-  if(sl)sl.textContent=(idx+1)+' / '+s.files.length;
-  if(slider)slider.value=idx;
-  // Update filmstrip active
-  document.querySelectorAll('.fs-frame').forEach((f,i)=>f.classList.toggle('active',i===idx));
-  // Scroll filmstrip to keep active visible
-  const activeFs=document.querySelector('.fs-frame.active');
-  if(activeFs)activeFs.scrollIntoView({block:'nearest',inline:'center',behavior:'smooth'});
-  // Draw main canvas
-  drawToCanvas(s.files[idx],cv,_vState.wc,_vState.ww,_vState.autoWw);
-  // Update overlay
-  const m=s.meta||{};
-  const tl=document.getElementById('viewer-overlay-tl');
-  if(tl){tl.textContent=`${s.desc||''}\n${s.mod||''} · ${m.fieldStrength!=null?m.fieldStrength+'T':''}\nTR ${m.tr!=null?m.tr+'ms':'—'} · TE ${m.te!=null?m.te+'ms':'—'}`;}
-  const br=document.getElementById('viewer-overlay-br');
-  if(br){br.textContent=`#${idx+1}/${s.files.length}\nW:${Math.round(_vState.ww)} C:${Math.round(_vState.wc)}`;}
-}
-
-function drawToCanvas(entry,cv,wc,ww,auto){
-  try{
-    const ds=entry.ds;if(!ds)return;
-    const pe=ds.elements.x7fe00010;if(!pe)return;
-    const rows=dcmUint16(ds,'x00280010'),cols=dcmUint16(ds,'x00280011');
-    if(!rows||!cols)return;
-    const bitsAlloc=dcmUint16(ds,'x00280100',16);
-    const pixRep=dcmUint16(ds,'x00280103',0);
-    const slope=dcmFloat(ds,'x00281053',1)||1;
-    const intercept=dcmFloat(ds,'x00281052',0)||0;
-    let rwc=wc,rww=ww;
-    if(auto){
-      const storedWc=dcmFloat(ds,'x00281050',null);
-      const storedWw=dcmFloat(ds,'x00281051',null);
-      if(storedWc!=null&&storedWw!=null&&storedWw>0){rwc=storedWc;rww=storedWw;}
-    }
-    const ba=entry.byteArray,offset=pe.dataOffset,needed=rows*cols;
-    if(offset+needed*(bitsAlloc===16?2:1)>ba.length)return;
-    let pixels;
-    if(bitsAlloc===16){
-      const absOffset=ba.byteOffset+offset;
-      if(absOffset%2!==0){const buf=new ArrayBuffer(needed*2);new Uint8Array(buf).set(ba.subarray(offset,offset+needed*2));pixels=pixRep===1?new Int16Array(buf):new Uint16Array(buf);}
-      else{pixels=pixRep===1?new Int16Array(ba.buffer,absOffset,needed):new Uint16Array(ba.buffer,absOffset,needed);}
-    }else if(bitsAlloc===8){pixels=new Uint8Array(ba.buffer,ba.byteOffset+offset,needed);}
-    else return;
-    if(auto&&(rwc===40&&rww===80)){
-      let mn=Infinity,mx=-Infinity;
-      for(let i=0;i<pixels.length;i++){const v=pixels[i]*slope+intercept;if(v<mn)mn=v;if(v>mx)mx=v;}
-      rww=mx-mn||1;rwc=mn+rww/2;
-    }
-    const lo=rwc-rww/2,range=rww||1;
-    cv.width=cols;cv.height=rows;
-    const ctx=cv.getContext('2d');
-    const imgData=ctx.createImageData(cols,rows);const d=imgData.data;
-    for(let i=0;i<needed;i++){
-      const hu=pixels[i]*slope+intercept;
-      let v=Math.round(((hu-lo)/range)*255);v=v<0?0:v>255?255:v;
-      const p=i<<2;d[p]=v;d[p+1]=v;d[p+2]=v;d[p+3]=255;
-    }
-    ctx.putImageData(imgData,0,0);
-    // Update overlay wc/ww
-    if(auto){_vState.wc=rwc;_vState.ww=rww;}
-    const br=document.getElementById('viewer-overlay-br');
-    if(br){br.textContent=`#${_vState.idx+1}/${_vState.series.files.length}\nW:${Math.round(_vState.ww)} C:${Math.round(_vState.wc)}`;}
-  }catch(e){}
-}
-
-function drawFilmstripFrame(entry,cv){
-  try{
-    const tmpCv=document.getElementById('offscreen');
-    drawToCanvas(entry,tmpCv,_vState.wc,_vState.ww,true);
-    cv.width=56;cv.height=56;
-    cv.getContext('2d').drawImage(tmpCv,0,0,56,56);
-  }catch(e){}
-}
-
-async function initViewer(s){
-  _vState.series=s;_vState.idx=0;_vState.autoWw=true;_vState.wc=40;_vState.ww=80;
-  const wrap=document.getElementById('viewer-wrap');if(!wrap)return;
-  wrap.style.display='flex';wrap.style.flexDirection='column';
-  const slider=document.getElementById('viewer-slider');
-  if(slider){slider.max=s.files.length-1;slider.value=0;}
-  // Filmstrip — render all frames lazily
-  const fs=document.getElementById('filmstrip');
-  if(fs){
-    fs.innerHTML='';
-    s.files.forEach((f,i)=>{
-      const frame=document.createElement('div');frame.className='fs-frame'+(i===0?' active':'');
-      const cv=document.createElement('canvas');cv.className='fs-canvas';cv.width=56;cv.height=56;
-      const lbl=document.createElement('div');lbl.className='fs-lbl';lbl.textContent='#'+(i+1);
-      frame.appendChild(cv);frame.appendChild(lbl);
-      frame.addEventListener('click',()=>renderSlice(i));
-      fs.appendChild(frame);
-      // Lazy render filmstrip frames
-      setTimeout(()=>drawFilmstripFrame(f,cv),i*8);
-    });
-  }
-  // Window presets
-  document.querySelectorAll('.viewer-ww-btn').forEach(btn=>{
-    btn.classList.remove('active');
-    btn.addEventListener('click',()=>{
-      document.querySelectorAll('.viewer-ww-btn').forEach(b=>b.classList.remove('active'));
-      btn.classList.add('active');
-      const wc=parseFloat(btn.dataset.wc),ww=parseFloat(btn.dataset.ww);
-      if(btn.id==='ww-auto'){_vState.autoWw=true;_vState.wc=40;_vState.ww=80;}
-      else{_vState.autoWw=false;_vState.wc=wc;_vState.ww=ww;}
-      renderSlice(_vState.idx);
-    });
-  });
-  document.getElementById('ww-auto')?.classList.add('active');
-  // Slider
-  slider?.addEventListener('input',()=>renderSlice(parseInt(slider.value)));
-  // Arrow buttons
-  document.getElementById('viewer-prev')?.addEventListener('click',()=>renderSlice(Math.max(0,_vState.idx-1)));
-  document.getElementById('viewer-next')?.addEventListener('click',()=>renderSlice(Math.min(s.files.length-1,_vState.idx+1)));
-  // Keyboard navigation
-  document.addEventListener('keydown',_viewerKeyHandler);
-  // Scroll wheel on viewer
-  document.getElementById('viewer-main')?.addEventListener('wheel',e=>{
-    e.preventDefault();
-    const delta=e.deltaY>0?1:-1;
-    renderSlice(Math.max(0,Math.min(s.files.length-1,_vState.idx+delta)));
-  },{passive:false});
-  // Render first slice
-  renderSlice(0);
-}
-
-function _viewerKeyHandler(e){
-  if(!_vState.series)return;
-  if(e.key==='ArrowRight'||e.key==='ArrowDown')renderSlice(Math.min(_vState.series.files.length-1,_vState.idx+1));
-  if(e.key==='ArrowLeft'||e.key==='ArrowUp')renderSlice(Math.max(0,_vState.idx-1));
-}
-
-async function renderThumbs(s,kfIdx){
-  // Now replaced by full viewer — just init it
-  await initViewer(s);
-}
-
-/* ── OPEN REPORT ── */
-function openRep(uid){showPage('report');selectSeries(uid);}
-
-async function selectSeries(uid){
-  activeUID=uid;_chatMessages=[];renderSerList();
-  const s=SM.get(uid);if(!s)return;
-  const titleEl=document.getElementById('rp-title');
-  titleEl.textContent=s.desc+' · '+s.mod+' · '+s.files.length+' slices';
-  document.getElementById('rp-tabs').style.display='flex';
-  document.getElementById('api-err').style.display='none';
-  if(s.report){
-    await renderThumbs(s,keyFrames(s));
-    activeTab='rep';renderOut(s);
-    document.getElementById('copy-btn').style.display='';
-    document.getElementById('dl-btn').style.display='';
-    return;
-  }
-  await doReport(s);
-}
-
-/* ── GENERATE REPORT — STREAMING ── */
-async function doReport(s){
-  // API key is optional in artifact context (auth handled by proxy)
-  // Show hint if no key and not in artifact environment
-  if(!_apiKey && typeof window.claude === 'undefined'){
-    const body=document.getElementById('rp-body');
-    body.innerHTML='';
-    const oe=document.createElement('div');oe.className='oe';
-    const ic=document.createElement('div');ic.className='oe-ic';ic.textContent='🔑';
-    const p1=document.createElement('p');p1.style.fontSize='13px';p1.textContent='API key required (standalone mode)';
-    const p2=document.createElement('p');p2.className='oe-sub';p2.textContent='Enter your Anthropic API key in the bar above when running outside Claude.ai.';
-    oe.appendChild(ic);oe.appendChild(p1);oe.appendChild(p2);body.appendChild(oe);
-    return;
+    return null;
   }
 
-  const kfIdx=keyFrames(s);
-  await renderThumbs(s,kfIdx);
-
-  const body=document.getElementById('rp-body');
-  body.innerHTML='';
-  const gen=document.createElement('div');gen.className='gen';
-  const gs1=makeStep(1,`Extracting ${kfIdx.length} frames in parallel…`,'act');
-  const gs2=makeStep(2,'Sending to Claude Sonnet vision…','wait');
-  gen.appendChild(gs1.el);gen.appendChild(gs2.el);
-  body.appendChild(gen);
-
-  const t0=Date.now();
-  audit(`Vision report started: ${s.desc} — ${kfIdx.length} frames`,'info');
-
-  const results=await Promise.all(kfIdx.map(idx=>sliceToB64(s.files[idx]).then(b64=>({idx,b64}))));
-  const frames=results.filter(r=>r.b64!==null);
-  gs1.done();
-
-  if(!frames.length){
-    body.innerHTML='';
-    const oe=document.createElement('div');oe.className='oe';
-    const ic=document.createElement('div');ic.className='oe-ic';ic.textContent='⚠';
-    const p1=document.createElement('p');p1.style.color='var(--rd)';p1.style.fontSize='13px';p1.textContent='No frames could be extracted';
-    const p2=document.createElement('p');p2.className='oe-sub';p2.style.marginTop='6px';
-    p2.textContent='Likely compressed transfer syntax (JPEG-2000, RLE). Export as Explicit VR Little Endian from your PACS.';
-    oe.appendChild(ic);oe.appendChild(p1);oe.appendChild(p2);body.appendChild(oe);
-    audit(`Frame extraction failed — ${s.desc}`,'warn');
-    return;
+  function tagStr(group,element){
+    const t=findTag(group,element);
+    return t?str(t.off,t.len):'';
+  }
+  function tagNum(group,element){
+    const t=findTag(group,element);
+    return t?parseInt(str(t.off,t.len))||0:0;
   }
 
-  audit(`${frames.length} frames extracted — ${Math.round(frames.reduce((a,f)=>a+f.b64.length*0.75,0)/1024)} KB payload`,'ok');
-  gs2.activate();
-
-  // Switch to streaming container
-  body.innerHTML='';
-  const streamHdr=document.createElement('div');
-  streamHdr.style.cssText='padding:12px 14px;border-bottom:.5px solid var(--bd);display:flex;align-items:center;gap:8px;font-size:12px;color:var(--t3)';
-  const spinEl=document.createElement('div');spinEl.className='gic spin-ic';
-  const tokEl=document.createElement('span');tokEl.style.fontFamily="'DM Mono',monospace";tokEl.textContent='0 tokens';
-  streamHdr.appendChild(spinEl);streamHdr.appendChild(document.createTextNode('Generating report… '));streamHdr.appendChild(tokEl);
-  const streamOut=document.createElement('div');
-  streamOut.style.cssText='padding:14px;font-size:12.5px;line-height:1.75;color:var(--t2);white-space:pre-wrap;word-break:break-word';
-  body.appendChild(streamHdr);body.appendChild(streamOut);
-
-  const m=s.meta;
-  const metaStr=[
-    `Series: ${m.desc||'?'}`,`Modality: ${m.mod||'?'}`,`Body part: ${m.bodyPart||'?'}`,
-    `Slices: ${m.slices}`,`Protocol: ${m.proto||'?'}`,`Sequence: ${m.seq||'?'}`,
-    `TR: ${m.tr!=null?m.tr+'ms':'?'}`,`TE: ${m.te!=null?m.te+'ms':'?'}`,
-    `Flip: ${m.flip!=null?m.flip+'°':'?'}`,`Field: ${m.fieldStrength!=null?m.fieldStrength+'T':'?'}`,
-    `Manufacturer: ${m.manufacturer||'?'}`,`Study date: ${m.studyDate||'?'}`
-  ].join(' | ');
-
-  const content=[
-    {type:'text',text:`You are an expert neuroradiologist (Atlas Klinische Neuroradiologie des Gehirns, Linn/Wiesmann/Brückmann, Springer 2011).
-
-Analyze these ${frames.length} windowed grayscale DICOM frames from a ${m.slices}-slice series. Frames are evenly sampled from the central 80%.
-
-METADATA: ${metaStr}
-
-Write a complete structured neuroradiology report based on your visual analysis. Do not ask for more input.
-
-Structure:
-1. EXAMINATION TYPE & TECHNIQUE
-2. CLINICAL INDICATION (infer from metadata)
-3. FINDINGS (systematic, anatomically organized)
-4. IMPRESSION / DIAGNOSIS (ranked differentials with confidence)
-5. RECOMMENDATIONS (further imaging, urgency)
-
-Then write a section header "DIFFERENTIALS" followed by the top 5 ranked differentials.
-
-Rules: begin with "AI-ASSISTED VISION REPORT — ${frames.length}/${m.slices} frames — FOR RESEARCH USE ONLY — Radiologist review required"; prefix emergencies URGENT:; professional medical language.`},
-    ...frames.map(f=>({type:'image',source:{type:'base64',media_type:'image/jpeg',data:f.b64}})),
-    {type:'text',text:`Slice positions: ${frames.map(f=>f.idx+1).join(', ')} of ${m.slices}. Write the full report now.`}
-  ];
-
-  // In Claude artifact context, auth is handled by the proxy automatically.
-  // API key field is optional — used only when running standalone outside the artifact.
-  const headers={
-    'Content-Type':'application/json',
-    'anthropic-version':'2023-06-01',
-    'anthropic-dangerous-direct-browser-access':'true'
+  const meta={
+    patientName: tagStr(0x0010,0x0010)||'ANONYMOUS',
+    patientDOB:  tagStr(0x0010,0x0030),
+    studyDate:   tagStr(0x0008,0x0020),
+    modality:    tagStr(0x0008,0x0060),
+    seriesDesc:  tagStr(0x0008,0x103E)||tagStr(0x0008,0x1030),
+    institution: tagStr(0x0008,0x0080),
+    rows:        tagNum(0x0028,0x0010),
+    cols:        tagNum(0x0028,0x0011),
+    bitsAlloc:   tagNum(0x0028,0x0100)||16,
+    bitsStored:  tagNum(0x0028,0x0101)||12,
+    pixelRepresentation: tagNum(0x0028,0x0103),
+    rescaleIntercept: parseFloat(tagStr(0x0028,0x1052))||0,
+    rescaleSlope: parseFloat(tagStr(0x0028,0x1053))||1,
+    windowCenter: parseFloat(tagStr(0x0028,0x1050))||40,
+    windowWidth:  parseFloat(tagStr(0x0028,0x1051))||80,
+    instanceNum:  tagNum(0x0020,0x0013),
+    fileName: fname,
   };
-  if(_apiKey) headers['x-api-key']=_apiKey;
-  let resp;
+
+  // pixel data tag 7FE0,0010
+  let pixelOff=0,pixelLen=0;
+  for(let i=132;i<Math.min(buf.byteLength-8,500000);i+=2){
+    try{
+      if(dv.getUint16(i,true)===0x7FE0&&dv.getUint16(i+2,true)===0x0010){
+        const vr=str(i+4,2);
+        if(vr==='OB'||vr==='OW'){pixelOff=i+12;pixelLen=dv.getUint32(i+8,true);}
+        else{pixelOff=i+8;pixelLen=dv.getUint32(i+4,true);}
+        break;
+      }
+    }catch{}
+  }
+  return {...meta,buf,pixelOff,pixelLen};
+}
+
+/* ── SHOW / HIDE VIEWER ─────────────────────────────────────── */
+function showViewer(){
+  document.getElementById('drop-zone').style.display='none';
+  document.getElementById('viewer-wrap').style.display='flex';
+  document.getElementById('meta-card').style.display='block';
+  const sl=document.getElementById('slice-slider');
+  sl.max=slices.length-1;sl.value=0;
+  document.getElementById('viewer-empty').style.display='none';
+}
+window.clearStudy=function(){
+  slices=[];currentSlice=0;
+  document.getElementById('drop-zone').style.display='';
+  document.getElementById('viewer-wrap').style.display='none';
+  document.getElementById('meta-card').style.display='none';
+  document.getElementById('anon-warn').style.display='none';
+  document.getElementById('filmstrip').innerHTML='';
+  const cv=document.getElementById('main-canvas');
+  const ctx=cv.getContext('2d');ctx.clearRect(0,0,cv.width,cv.height);
+  addAudit('Study','Study cleared');
+};
+
+/* ── RENDER SLICE ───────────────────────────────────────────── */
+window.renderSlice=function(idx){
+  if(!slices.length)return;
+  idx=Math.max(0,Math.min(idx,slices.length-1));
+  currentSlice=idx;
+  document.getElementById('slice-slider').value=idx;
+  document.getElementById('slice-label').textContent=`${idx+1} / ${slices.length}`;
+  // update filmstrip highlight
+  document.querySelectorAll('.film-thumb').forEach((el,i)=>el.classList.toggle('active',i===idx));
+
+  const entry=slices[idx];
+  const cv=document.getElementById('main-canvas');
+  drawToCanvas(entry,cv,wc,ww,false);
+
+  // overlay
+  document.getElementById('ov-topleft').textContent=entry.patientName||'';
+  document.getElementById('ov-topright').textContent=entry.modality+' '+entry.studyDate;
+  document.getElementById('ov-br').textContent=`WC:${wc} WW:${ww}`;
+};
+
+/* ── DRAW TO CANVAS ─────────────────────────────────────────── */
+function drawToCanvas(entry,cv,wc,ww,forThumb){
+  if(!entry.rows||!entry.cols||!entry.pixelOff)return;
+  const rows=entry.rows,cols=entry.cols;
+  cv.width=cols;cv.height=rows;
+  const ctx=cv.getContext('2d');
+  const img=ctx.createImageData(cols,rows);
+  const dv=new DataView(entry.buf);
+  const signed=entry.pixelRepresentation===1;
+  const bytes2=entry.bitsAlloc===16;
+  const lo=wc-ww/2, hi=wc+ww/2;
+  const pxCount=rows*cols;
+  for(let i=0;i<pxCount;i++){
+    let raw;
+    if(bytes2){
+      const off=entry.pixelOff+i*2;
+      if(off+1>=entry.buf.byteLength)break;
+      raw=signed?dv.getInt16(off,true):dv.getUint16(off,true);
+    } else {
+      const off=entry.pixelOff+i;
+      if(off>=entry.buf.byteLength)break;
+      raw=signed?dv.getInt8(off):dv.getUint8(off);
+    }
+    const hu=raw*entry.rescaleSlope+entry.rescaleIntercept;
+    let v=Math.round((hu-lo)/(hi-lo)*255);
+    v=Math.max(0,Math.min(255,v));
+    if(inverted)v=255-v;
+    const idx4=i*4;
+    img.data[idx4]=v;img.data[idx4+1]=v;img.data[idx4+2]=v;img.data[idx4+3]=255;
+  }
+  ctx.putImageData(img,0,0);
+}
+
+/* ── FILMSTRIP ──────────────────────────────────────────────── */
+function buildFilmstrip(){
+  const fs=document.getElementById('filmstrip');
+  fs.innerHTML='';
+  slices.forEach((s,i)=>{
+    const wrap=document.createElement('div');
+    wrap.className='film-thumb'+(i===0?' active':'');
+    wrap.onclick=()=>renderSlice(i);
+    const tc=document.createElement('canvas');
+    drawToCanvas(s,tc,wc,ww,true);
+    wrap.appendChild(tc);
+    fs.appendChild(wrap);
+  });
+}
+
+/* ── POPULATE META ──────────────────────────────────────────── */
+function populateMeta(){
+  if(!slices.length)return;
+  const m=slices[0];
+  document.getElementById('mi-patient').textContent=m.patientName||'—';
+  document.getElementById('mi-dob').textContent=fmtDate(m.patientDOB)||'—';
+  document.getElementById('mi-date').textContent=fmtDate(m.studyDate)||'—';
+  document.getElementById('mi-modality').textContent=m.modality||'—';
+  document.getElementById('mi-series').textContent=m.seriesDesc||'—';
+  document.getElementById('mi-inst').textContent=m.institution||'—';
+  document.getElementById('mi-slices').textContent=slices.length;
+  if(m.patientName&&m.patientName!=='ANONYMOUS'){
+    document.getElementById('anon-warn').style.display='flex';
+  }
+  if(m.windowCenter)wc=m.windowCenter;
+  if(m.windowWidth)ww=m.windowWidth;
+}
+
+function fmtDate(s){
+  if(!s||s.length<8)return s||'';
+  return `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`;
+}
+
+/* ── WINDOW PRESETS ─────────────────────────────────────────── */
+window.setWindow=function(center,width,name,btn){
+  wc=center;ww=width;
+  document.querySelectorAll('.vc-btn').forEach(b=>b.classList.remove('active'));
+  if(btn)btn.classList.add('active');
+  renderSlice(currentSlice);
+  buildFilmstrip();
+  addAudit('Window','Set window: '+name+' WC='+center+' WW='+width);
+};
+window.autoWindow=function(){
+  if(!slices.length)return;
+  const e=slices[currentSlice];
+  const dv=new DataView(e.buf);
+  const bytes2=e.bitsAlloc===16;
+  let mn=Infinity,mx=-Infinity;
+  const n=Math.min(e.rows*e.cols,50000);
+  for(let i=0;i<n;i++){
+    let raw;
+    if(bytes2){const o=e.pixelOff+i*2;raw=dv.getInt16(o,true);}
+    else{const o=e.pixelOff+i;raw=dv.getInt8(o);}
+    const hu=raw*e.rescaleSlope+e.rescaleIntercept;
+    if(hu<mn)mn=hu;if(hu>mx)mx=hu;
+  }
+  wc=Math.round((mn+mx)/2);ww=Math.round(mx-mn);
+  document.querySelectorAll('.vc-btn').forEach(b=>b.classList.remove('active'));
+  renderSlice(currentSlice);buildFilmstrip();
+  toast('Auto W/L: WC='+wc+' WW='+ww,'ok');
+};
+window.invertToggle=function(){
+  inverted=!inverted;
+  renderSlice(currentSlice);buildFilmstrip();
+};
+
+/* ── ANONYMIZE ──────────────────────────────────────────────── */
+window.anonymizeAll=function(){
+  slices.forEach(s=>{s.patientName='ANON';s.patientDOB='';});
+  populateMeta();
+  document.getElementById('anon-warn').style.display='none';
+  const n=document.getElementById('rp-narrative');
+  if(n.value)n.value=n.value.replace(/\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)+\b/g,'ANON');
+  toast('Patient identifiers anonymized','warn');
+  addAudit('Privacy','Study anonymized');
+};
+
+/* ── AI ASSISTANT ───────────────────────────────────────────── */
+window.sendAI=async function(){
+  const key=apiKey;
+  if(!key){showKeyBar();toast('Enter your Anthropic API key first','err');return;}
+  const prompt=document.getElementById('ai-prompt').value.trim();
+  if(!prompt)return;
+
+  const ctx=buildStudyContext();
+  const systemPrompt=`You are a board-certified neuroradiologist AI assistant. ${ctx}
+Respond with clinical precision. Use standard radiology report formatting where appropriate.`;
+
+  document.getElementById('ai-spin').style.display='inline-block';
+  document.getElementById('ai-send-btn').disabled=true;
+  document.getElementById('ai-output').textContent='';
+  document.getElementById('ai-output').className='ai-msg';
+  addAudit('AI','Sent prompt: '+prompt.slice(0,80));
+
   try{
-    resp=await fetch('https://api.anthropic.com/v1/messages',{
+    const resp=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
-      headers,
+      headers:{
+        'Content-Type':'application/json',
+        'x-api-key':key,
+        'anthropic-version':'2023-06-01',
+        'anthropic-dangerous-direct-browser-access':'true'
+      },
       body:JSON.stringify({
-        model:'claude-haiku-4-5-20251001',max_tokens:2500,stream:false,
-        system:SYS_PROMPT,messages:[{role:'user',content}]
+        model:'claude-opus-4-5',
+        max_tokens:2048,
+        system:systemPrompt,
+        messages:[{role:'user',content:prompt}]
       })
     });
-  }catch(fetchErr){
-    // fetch() itself threw — CORS block, no network, or CSP violation
-    const msg='Network error: '+String(fetchErr.message||fetchErr)+
-      '. If opened as file://, try serving over http://localhost instead.';
-    showApiError(msg);
-    audit('Fetch threw: '+sanitizeText(String(fetchErr.message)),'warn');
-    return;
-  }
-
-  audit('HTTP '+resp.status+' '+resp.statusText,'info');
-
-  if(!resp.ok){
-    let errMsg='HTTP '+resp.status;
-    try{const t=await resp.text();errMsg+=': '+(JSON.parse(t).error?.message||t.slice(0,200));}catch{}
-    showApiError(errMsg);
-    audit('API error: '+errMsg,'warn');
-    return;
-  }
-
-  // ── READ RESPONSE (non-streaming JSON) ──
-  let fullText;
-  try{
-    fullText=await resp.text();
-  }catch(e){
-    showApiError('Response read failed: '+e.message);
-    audit('Response read failed: '+sanitizeText(e.message),'warn');
-    return;
-  }
-
-
-  let data;
-  try{ data=JSON.parse(fullText); }
-  catch(e){ showApiError('JSON parse failed: '+fullText.slice(0,300)); return; }
-
-  if(data.error){
-    showApiError('API error: '+data.error.message);
-    audit('API error: '+data.error.message,'warn');
-    return;
-  }
-
-  const reportText=data.content?.filter(b=>b.type==='text').map(b=>b.text).join('').trim()||'';
-  if(!reportText){
-    // Show the full API response in the audit log so we can diagnose
-    audit('API response had no text. stop_reason='+data.stop_reason+' usage='+JSON.stringify(data.usage),'warn');
-    showApiError('API responded but returned no text. stop_reason: "'+data.stop_reason+'". Check audit log for details.');
-    return;
-  }
-
-  const tokensUsed=data.usage?.output_tokens||0;
-  tokEl.textContent=tokensUsed+' tokens';
-  streamOut.textContent=reportText;
-
-  const diffMarker=reportText.search(/\nDIFFERENTIALS/i);
-  s.report=diffMarker>-1?reportText.slice(0,diffMarker).trim():reportText;
-  s.diff=diffMarker>-1?reportText.slice(diffMarker).replace(/^[\n\-=]+/,'').trim():'';
-
-  const elapsed=((Date.now()-t0)/1000).toFixed(1);
-  activeTab='rep'; renderOut(s); renderSerList(); updateUI();
-  document.getElementById('copy-btn').style.display='';
-  document.getElementById('dl-btn').style.display='';
-  document.getElementById('api-err').style.display='none';
-  audit('Report complete: '+s.desc+' — '+tokensUsed+' tokens — '+elapsed+'s','ok');
-  toast('Report ready in '+elapsed+'s');
-}
-
-function showApiError(msg){
-  const errEl=document.getElementById('api-err');
-  errEl.textContent='Error: '+msg; // textContent — never innerHTML
-  errEl.style.display='';
-  const body=document.getElementById('rp-body');
-  body.innerHTML='';
-  const oe=document.createElement('div');oe.className='oe';
-  const ic=document.createElement('div');ic.className='oe-ic';ic.textContent='⚠';
-  const p1=document.createElement('p');p1.style.cssText='color:var(--rd);font-size:13px';p1.textContent='Report generation failed';
-  const p2=document.createElement('p');p2.className='oe-sub';p2.style.cssText='margin-top:6px;font-family:DM Mono,monospace;font-size:11px;word-break:break-all';
-  p2.textContent=msg; // textContent — safe even if msg contains HTML
-  const btn=document.createElement('button');btn.className='btn btn-s';btn.style.marginTop='14px';btn.textContent='↺ Retry';
-  btn.addEventListener('click',()=>{if(activeUID&&SM.has(activeUID))doReport(SM.get(activeUID));});
-  oe.appendChild(ic);oe.appendChild(p1);oe.appendChild(p2);oe.appendChild(btn);body.appendChild(oe);
-}
-
-function makeStep(n,text,state){
-  const gs=document.createElement('div');gs.className='gs '+state;
-  const ic=document.createElement('div');ic.className='gic '+(state==='act'?'spin-ic':'wait-ic');
-  if(state==='wait')ic.textContent=n;
-  const span=document.createElement('span');span.textContent=text;
-  gs.appendChild(ic);gs.appendChild(span);
-  return{
-    el:gs,
-    done(){gs.className='gs done';ic.className='gic done-ic';ic.textContent='✓';},
-    activate(){gs.className='gs act';ic.className='gic spin-ic';ic.textContent='';}
-  };
-}
-
-/* ── TABS — event delegation, no onclick attrs ── */
-document.getElementById('rp-tabs').addEventListener('click',e=>{
-  const btn=e.target.closest('[data-tab]');if(!btn)return;
-  activeTab=btn.dataset.tab;
-  document.querySelectorAll('.rp-tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===activeTab));
-  if(activeTab==='chat'){
-    renderChat(false);
-  } else if(activeUID&&SM.has(activeUID)){
-    renderOut(SM.get(activeUID));
-  }
-});
-
-/* ── RENDER OUTPUT — all textContent, no innerHTML for user data ── */
-function renderOut(s){
-  const body=document.getElementById('rp-body');
-  body.innerHTML='';
-  if(activeTab==='rep'){
-    if(s.report) body.appendChild(fmtRep(s.report));
-    else{const p=document.createElement('p');p.textContent='No report.';body.appendChild(p);}
-  } else if(activeTab==='diff'){
-    if(s.diff) body.appendChild(fmtRep(s.diff));
-    else{const p=document.createElement('p');p.textContent='No differentials.';body.appendChild(p);}
-  } else {
-    body.appendChild(buildMeta(s));
-  }
-}
-
-/* ── fmtRep — DOM nodes only, textContent for all content ── */
-function fmtRep(txt){
-  const wrap=document.createElement('div');
-  txt.split('\n').forEach(l=>{
-    const isH=/^[1-9]\.|^#{1,3} |^[A-Z][A-Z &\/\-]{2,}:$/.test(l.trim());
-    const isSH=/^[A-Z][a-zA-Z\s\-\/]+:$/.test(l.trim())&&l.trim().length<55;
-    if(isH||isSH){const p=document.createElement('p');p.className='rsect';p.textContent=l;wrap.appendChild(p);}
-    else if(!l.trim()){wrap.appendChild(document.createElement('br'));}
-    else{const p=document.createElement('p');p.className='rline';p.textContent=l;wrap.appendChild(p);}
-  });
-  return wrap;
-}
-
-function buildMeta(s){
-  const m=s.meta;
-  const grid=document.createElement('div');grid.className='mgrid';
-  const fields=[
-    ['Description',m.desc],['Modality',m.mod],['Body part',m.bodyPart],
-    ['Slices',m.slices],['Protocol',m.proto],['Sequence',m.seq],
-    ['TR / TE',(m.tr!=null?m.tr+'ms':'—')+' / '+(m.te!=null?m.te+'ms':'—')],
-    ['Field strength',m.fieldStrength!=null?m.fieldStrength+'T':'—'],
-    ['Manufacturer',m.manufacturer],['Study date',m.studyDate],
-  ];
-  fields.forEach(([lbl,val])=>{
-    const mg=document.createElement('div');mg.className='mg';
-    const l=document.createElement('div');l.className='mg-l';l.textContent=lbl;
-    const v=document.createElement('div');v.className='mg-v';v.textContent=val||'—';
-    mg.appendChild(l);mg.appendChild(v);grid.appendChild(mg);
-  });
-  // hash and UID span full width
-  [['Patient hash (SHA-256)',s.hash],['Series UID',s.uid]].forEach(([lbl,val])=>{
-    const mg=document.createElement('div');mg.className='mg';mg.style.gridColumn='1/-1';
-    const l=document.createElement('div');l.className='mg-l';l.textContent=lbl;
-    const v=document.createElement('div');v.className='mg-v';v.style.fontFamily="'DM Mono',monospace";v.style.fontSize='11px';v.textContent=val||'—';
-    mg.appendChild(l);mg.appendChild(v);grid.appendChild(mg);
-  });
-  return grid;
-}
-
-function resetRp(){
-  document.getElementById('rp-title').textContent='Select a series to begin';
-  document.getElementById('viewer-wrap').style.display='none';
-  document.getElementById('rp-tabs').style.display='none';
-  document.getElementById('copy-btn').style.display='none';
-  document.getElementById('dl-btn').style.display='none';
-  document.removeEventListener('keydown',_viewerKeyHandler);
-  _vState.series=null;
-  const body=document.getElementById('rp-body');
-  body.innerHTML='';
-  const oe=document.createElement('div');oe.className='oe';
-  const ic=document.createElement('div');ic.className='oe-ic';ic.textContent='⬡';
-  const p=document.createElement('p');p.textContent='Select an anonymized series from the left';
-  oe.appendChild(ic);oe.appendChild(p);body.appendChild(oe);
-}
-
-/* ── COPY / DOWNLOAD ── */
-document.getElementById('copy-btn').addEventListener('click',()=>{
-  const s=activeUID&&SM.get(activeUID);if(!s)return;
-  const t=activeTab==='rep'?s.report:activeTab==='diff'?s.diff:'';if(!t)return;
-  navigator.clipboard.writeText(t).then(()=>{
-    const b=document.getElementById('copy-btn');b.textContent='✓ Copied';
-    setTimeout(()=>b.textContent='⎘ Copy',2000);
-  });
-});
-
-document.getElementById('dl-btn').addEventListener('click',()=>{
-  const s=activeUID&&SM.get(activeUID);if(!s||!s.report)return;
-  const lines=[
-    'NEURORADREPORTER — AUTOMATIC NEURORADIOLOGY REPORT',
-    'FOR RESEARCH USE ONLY — NOT FOR CLINICAL DIAGNOSIS',
-    '='.repeat(60),
-    'Series: '+s.desc,'Modality: '+s.mod,'Slices: '+s.files.length,
-    'Patient hash: '+s.hash,'Generated: '+new Date().toISOString(),
-    '','AI-ASSISTED — Mandatory radiologist review required',
-    '='.repeat(60),'',s.report,'','-'.repeat(60),'DIFFERENTIALS','-'.repeat(60),'',
-    s.diff||'Not generated'
-  ];
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([lines.join('\n')],{type:'text/plain'}));
-  a.download='nrr_'+s.desc.replace(/[^a-zA-Z0-9]/g,'_').slice(0,40)+'_'+Date.now()+'.txt';
-  a.click();
-  audit(`Report downloaded: ${s.desc}`,'ok');
-});
-
-/* ── SYSTEM PROMPT ── */
-const SYS_PROMPT=`You are an expert neuroradiologist trained on the Atlas Klinische Neuroradiologie des Gehirns (Linn, Wiesmann, Brückmann, Springer 2011).
-
-VASCULAR: Acute ischemic stroke — CT: dense artery, loss insular ribbon, obscuration lentiform nucleus. DWI restriction within minutes; FLAIR negative <6h (mismatch=penumbra). Hemorrhage: acute hyperdense CT → MetHb T1-bright → hemosiderin ring T2*/SWI. SDH concave crosses sutures; EDH biconvex respects sutures. SAH: hyperdense cisterns CT, FLAIR sulcal hyperintensity. Cavernoma: popcorn+hemosiderin ring T2*w. AVM: flow voids T2w.
-
-TUMORS: GBM WHO IV — ring enhancement, central necrosis, corpus callosum butterfly, perifocal edema, DWI restriction solid parts. Low-grade glioma WHO II — T2/FLAIR hyperintense, minimal enhancement. Meningioma — extra-axial, dural tail, homogeneous enhancement, hyperostosis. Metastases — grey-white junction, ring/nodular enhancement, disproportionate edema. CNS lymphoma — periventricular, homogeneous enhancement, DWI restriction. Medulloblastoma — posterior fossa, DWI restriction, leptomeningeal seeding. Acoustic neuroma — CPA-IAC mass.
-
-INFECTIONS: Brain abscess — smooth ring enhancement, central DWI restriction, T2 hypointense capsule. HSV — bilateral temporal/insular/cingulate FLAIR+DWI. Toxoplasmosis — basal ganglia eccentric target sign.
-
-DEMYELINATION: MS — periventricular Dawson fingers, callososeptal, juxtacortical, infratentorial; acute plaques enhance. ADEM — bilateral asymmetric WM, thalamus (40%), monophasic.
-
-METABOLIC: Wernicke — medial thalami, mammillary bodies, periaqueductal grey. PRES — posterior parieto-occipital vasogenic edema (ADC elevated). CJD — cortical ribboning DWI. MSA-C — hot cross bun pons. PSP — hummingbird sign sagittal. NPH — ventriculomegaly, tight sulci, aqueductal flow void. Alzheimer — mesiotemporal atrophy.
-
-Always: professional medical language, ranked differentials with confidence, flag urgent findings, note if coverage insufficient.`;
-
-updateUI();
-
-/* ══════════════════════════════════════
-   CHAT — in-report AI conversation
-══════════════════════════════════════ */
-let _chatMessages=[];
-const CHAT_Qs=[
-  'What is the most likely diagnosis?','Should this be flagged as urgent?',
-  'What additional sequences would help?','What follow-up imaging is recommended?',
-  'Explain the key finding in plain language','Which ICD-10 codes apply?',
-  'Compare the top two differentials','What would change if contrast was given?'
-];
-
-function renderChat(thinking){
-  const body=document.getElementById('rp-body');
-  if(!body)return;
-  const s=activeUID&&SM.get(activeUID);
-  const hasRep=!!(s&&s.report);
-  let html='<div class="chat-wrap">';
-  if(!_chatMessages.length){
-    html+=`<div class="chat-welcome">
-      <div class="chat-welcome-icon">${hasRep?'🧠':'💬'}</div>
-      <p class="chat-welcome-title">${hasRep?'Ask about this report':'Ask the neuroradiology AI'}</p>
-      <p class="chat-welcome-sub">${hasRep?'The AI has full access to the report and case context.':'Generate a report first for case-specific answers, or ask general questions.'}</p>`;
-    if(hasRep)html+=`<span class="chat-ctx-pill">📋 ${s.desc} · ${s.mod}</span>`;
-    html+=`<div class="chat-sq-wrap">${CHAT_Qs.map(q=>`<button class="chat-sq" data-q="${q.replace(/"/g,'&quot;')}">${q}</button>`).join('')}</div>`;
-    html+=`</div>`;
-  }
-  html+=`<div class="chat-msgs" id="chatMsgsEl">`;
-  _chatMessages.forEach(m=>{
-    html+=`<div class="chat-msg ${m.role}"><div class="chat-msg-lbl">${m.role==='user'?'You':'NeuroRad AI'}</div><div class="chat-msg-body">${m.role==='assistant'?m.content.replace(/\n/g,'<br>'):escChatHtml(m.content).replace(/\n/g,'<br>')}</div></div>`;
-  });
-  if(thinking)html+=`<div class="chat-msg assistant"><div class="chat-msg-lbl">NeuroRad AI</div><div class="chat-thinking"><span></span><span></span><span></span></div></div>`;
-  html+=`</div>`;
-  html+=`<div class="chat-input-row"><input class="chat-input" id="chatInputEl" type="text" placeholder="${hasRep?'Ask about this case…':'Ask about neuroradiology…'}" /><button class="btn btn-p chat-send" id="chatSendBtn">↑</button></div>`;
-  html+=`</div>`;
-  body.innerHTML=html;
-  const msgs=document.getElementById('chatMsgsEl');
-  if(msgs)msgs.scrollTop=msgs.scrollHeight;
-  document.getElementById('chatSendBtn')?.addEventListener('click',sendChat);
-  document.getElementById('chatInputEl')?.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey)sendChat();});
-  body.querySelectorAll('.chat-sq').forEach(btn=>btn.addEventListener('click',()=>sendChat(btn.dataset.q)));
-}
-
-function escChatHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
-
-async function sendChat(msgText){
-  const inp=document.getElementById('chatInputEl');
-  const text=msgText??(inp&&inp.value.trim());
-  if(!text)return;
-  if(inp)inp.value='';
-  const s=activeUID&&SM.get(activeUID);
-  let sysCtx=`You are an expert neuroradiologist trained on the Atlas Klinische Neuroradiologie des Gehirns (Linn/Wiesmann/Brückmann, Springer 2011). Answer concisely and clinically.`;
-  if(s){
-    sysCtx+=`\n\n── ACTIVE CASE ──\nSeries: ${s.desc}\nModality: ${s.mod}\nSlices: ${s.files.length}`;
-    if(s.meta?.proto)sysCtx+=`\nProtocol: ${s.meta.proto}`;
-    if(s.report)sysCtx+=`\n\nREPORT:\n${s.report}`;
-    if(s.diff)sysCtx+=`\n\nDIFFERENTIALS:\n${s.diff}`;
-    sysCtx+='\n\nAnswer the radiologist\'s question about this case concisely.';
-  }
-  _chatMessages.push({role:'user',content:text});
-  renderChat(true);
-  const headers={'Content-Type':'application/json','anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'};
-  if(_apiKey)headers['x-api-key']=_apiKey;
-  try{
-    const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers,
-      body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:800,system:sysCtx,
-        messages:_chatMessages.map(m=>({role:m.role,content:m.content}))})
-    });
-    if(!resp.ok){const e=await resp.json().catch(()=>({}));throw new Error(e.error?.message||`API ${resp.status}`);}
+    if(!resp.ok){
+      const err=await resp.json();
+      throw new Error(err.error?.message||resp.statusText);
+    }
     const data=await resp.json();
-    const reply=data.content?.[0]?.text||'No response.';
-    _chatMessages.push({role:'assistant',content:reply});
-    audit(`AI chat: "${text.slice(0,60)}"…`,'ok');
-  }catch(e){
-    _chatMessages.push({role:'assistant',content:'⚠ '+sanitizeText(e.message)});
-    audit('Chat error: '+sanitizeText(e.message),'warn');
-  }
-  renderChat(false);
-}
-
-/* ══════════════════════════════════════
-   PACS INTEGRATION
-══════════════════════════════════════ */
-const _pacsState={
-  system:'orthanc',mode:'export',
-  status:{state:'idle',message:''},
-  result:null,studies:[],
-  importQ:{patientID:'',patientName:'',studyDate:'',modality:''},
-  cfg:{
-    orthanc:{url:'http://localhost:8042',username:'',password:'',studyUID:''},
-    'hl7-fhir':{url:'http://localhost:8080/fhir',token:''},
-    'dicom-web':{url:'http://localhost:8080/wado',username:'',password:''},
-    'dicom-sr':{host:'localhost',port:'104',aeTitle:'NEURORAD',remoteAE:'PACS'},
-    sectra:{url:'http://localhost:8181/rest',username:'',password:'',studyUID:''},
-    agfa:{url:'http://localhost:8080/agfa',username:'',password:'',accession:''},
-    philips:{url:'http://localhost:8090/vue',token:'',studyUID:''},
-    visage:{url:'http://localhost:7070/api',token:''},
-    epic:{url:'https://hospital.epic.com/api/FHIR/R4',token:'',patientId:'',encounterId:''},
-    clipboard:{}
+    const text=data.content?.[0]?.text||'No response';
+    document.getElementById('ai-output').textContent=text;
+    addAudit('AI','Response received ('+text.length+' chars)');
+  } catch(e){
+    document.getElementById('ai-output').textContent='Error: '+e.message;
+    document.getElementById('ai-output').className='ai-msg';
+    toast('AI error: '+e.message,'err');
+    addAudit('AI','Error: '+e.message);
+  } finally {
+    document.getElementById('ai-spin').style.display='none';
+    document.getElementById('ai-send-btn').disabled=false;
+    document.getElementById('ai-prompt').value='';
   }
 };
 
-const PACS_SYSTEMS=[
-  {id:'orthanc',   label:'Orthanc',          icon:'◈',desc:'REST API — self-hosted PACS',       group:'Open Source'},
-  {id:'hl7-fhir',  label:'HL7 FHIR R4',      icon:'◉',desc:'FHIR DiagnosticReport / ImagingStudy',group:'Open Source'},
-  {id:'dicom-web', label:'DICOMweb',          icon:'▦',desc:'WADO-RS / STOW-RS / QIDO-RS',      group:'Open Source'},
-  {id:'dicom-sr',  label:'DICOM SR',          icon:'▣',desc:'Structured Report export (.sr)',    group:'Open Source'},
-  {id:'sectra',    label:'Sectra IDS7',       icon:'⬡',desc:'Sectra REST API — IDS7 / UniView', group:'Enterprise'},
-  {id:'agfa',      label:'Agfa Impax',        icon:'◐',desc:'Agfa Impax 6 / Enterprise REST',   group:'Enterprise'},
-  {id:'philips',   label:'Philips Vue PACS',  icon:'◑',desc:'Philips IntelliSpace / Vue PACS',  group:'Enterprise'},
-  {id:'visage',    label:'Visage 7',          icon:'◒',desc:'Visage Imaging REST API',           group:'Enterprise'},
-  {id:'epic',      label:'Epic Hyperspace',   icon:'⊕',desc:'Epic SMART on FHIR — NoteWriter',  group:'RIS/EHR'},
-  {id:'clipboard', label:'Clipboard / Manual',icon:'⊟',desc:'Copy formatted report text',        group:'Other'},
-];
+window.generateAI=async function(){
+  document.getElementById('ai-prompt').value='Generate a complete neuroradiology report based on the study information and any visible findings. Include: Technique, Findings (by anatomical region), and Impression.';
+  await sendAI();
+};
 
-function renderPACS(){
-  const root=document.getElementById('pacs-root');if(!root)return;
-  const p=_pacsState,sys=p.system,cfg=p.cfg[sys]||{};
-  const importSystems=['orthanc','hl7-fhir','dicom-web'];
-  const visibleSystems=p.mode==='import'?PACS_SYSTEMS.filter(s=>importSystems.includes(s.id)):PACS_SYSTEMS;
-
-  const wrap=document.createElement('div');wrap.style.cssText='display:flex;flex-direction:column;gap:0';
-
-  // Mode toggle
-  const modeRow=document.createElement('div');modeRow.className='pacs-mode-row';
-  ['export','import'].forEach(m=>{
-    const btn=document.createElement('button');btn.className='pacs-mode-btn'+(p.mode===m?' active':'');
-    btn.textContent=m==='export'?'↑ Export to PACS':'↓ Import from PACS';
-    btn.addEventListener('click',()=>{_pacsState.mode=m;_pacsState.status={state:'idle',message:''};_pacsState.studies=[];renderPACS();});
-    modeRow.appendChild(btn);
-  });
-  wrap.appendChild(modeRow);
-
-  // Group system grid
-  const groups=['Open Source','Enterprise','RIS/EHR','Other'];
-  groups.forEach(group=>{
-    const gsystems=visibleSystems.filter(s=>s.group===group);
-    if(!gsystems.length)return;
-    const lbl=document.createElement('div');lbl.className='pacs-group-lbl';lbl.textContent=group;wrap.appendChild(lbl);
-    const grid=document.createElement('div');grid.className='pacs-grid';
-    gsystems.forEach(s=>{
-      const card=document.createElement('button');card.className='pacs-card'+(sys===s.id?' active':'');
-      const icon=document.createElement('div');icon.className='pacs-card-icon';icon.textContent=s.icon;
-      const name=document.createElement('div');name.className='pacs-card-name';name.textContent=s.label;
-      const desc=document.createElement('div');desc.className='pacs-card-desc';desc.textContent=s.desc;
-      card.appendChild(icon);card.appendChild(name);card.appendChild(desc);
-      card.addEventListener('click',()=>{_pacsState.system=s.id;_pacsState.status={state:'idle',message:''};_pacsState.result=null;_pacsState.studies=[];renderPACS();});
-      grid.appendChild(card);
-    });
-    wrap.appendChild(grid);
-  });
-
-  // Config fields
-  const cfgSection=document.createElement('div');
-  cfgSection.style.cssText='background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);padding:14px 17px;margin-top:10px';
-  const cfgTitle=document.createElement('div');cfgTitle.className='ct';cfgTitle.textContent='Configuration — '+PACS_SYSTEMS.find(s=>s.id===sys)?.label;
-  cfgSection.appendChild(cfgTitle);
-  const fields=document.createElement('div');fields.className='pacs-fields';
-
-  function mkField(label,inputType,value,onChange,placeholder){
-    const f=document.createElement('div');f.className='pacs-field';
-    const l=document.createElement('label');l.textContent=label;
-    const inp=document.createElement('input');inp.type=inputType;inp.value=value||'';inp.placeholder=placeholder||'';
-    inp.addEventListener('input',()=>onChange(inp.value));
-    f.appendChild(l);f.appendChild(inp);return f;
-  }
-  function mkRow(...fieldEls){const r=document.createElement('div');r.className='pacs-field-row';fieldEls.forEach(f=>r.appendChild(f));return r;}
-  function mkInfo(text){const i=document.createElement('div');i.className='pacs-info-box';i.innerHTML=text;return i;}
-
-  if(sys==='orthanc'){
-    fields.appendChild(mkField('Orthanc URL','text',cfg.url,v=>cfg.url=v,'http://localhost:8042'));
-    fields.appendChild(mkRow(mkField('Username','text',cfg.username,v=>cfg.username=v,'orthanc'),mkField('Password','password',cfg.password,v=>cfg.password=v,'••••••')));
-    fields.appendChild(mkField('Study UID (export — attach to existing)','text',cfg.studyUID,v=>cfg.studyUID=v,'1.2.840.10008…'));
-  }else if(sys==='hl7-fhir'){
-    fields.appendChild(mkField('FHIR Server URL','text',cfg.url,v=>cfg.url=v,'http://hapi.fhir.org/baseR4'));
-    fields.appendChild(mkField('Bearer Token','password',cfg.token,v=>cfg.token=v,'eyJhbGci…'));
-    fields.appendChild(mkInfo('Export: POSTs FHIR R4 <code>DiagnosticReport</code>. Import: searches <code>ImagingStudy</code> + retrieves prior reports.'));
-  }else if(sys==='dicom-web'){
-    fields.appendChild(mkField('DICOMweb Base URL','text',cfg.url,v=>cfg.url=v,'http://localhost:8080/wado'));
-    fields.appendChild(mkRow(mkField('Username','text',cfg.username,v=>cfg.username=v,''),mkField('Password','password',cfg.password,v=>cfg.password=v,'')));
-    fields.appendChild(mkInfo('Uses QIDO-RS to search, WADO-RS to retrieve metadata, STOW-RS to export SRs.'));
-  }else if(sys==='dicom-sr'){
-    fields.appendChild(mkRow(mkField('Remote Host','text',cfg.host,v=>cfg.host=v,'192.168.1.100'),mkField('Port','number',cfg.port,v=>cfg.port=v,'104')));
-    fields.appendChild(mkRow(mkField('Calling AE','text',cfg.aeTitle,v=>cfg.aeTitle=v,'NEURORAD'),mkField('Called AE','text',cfg.remoteAE,v=>cfg.remoteAE=v,'PACS')));
-    fields.appendChild(mkInfo('Export only. Downloads SR as .txt file — push via <code>dcmsend</code> / <code>storescu</code>.'));
-  }else if(sys==='sectra'){
-    fields.appendChild(mkField('Sectra IDS7 REST URL','text',cfg.url,v=>cfg.url=v,'http://ids7-server:8181/rest'));
-    fields.appendChild(mkRow(mkField('Username','text',cfg.username,v=>cfg.username=v,'radiologist'),mkField('Password','password',cfg.password,v=>cfg.password=v,'••••••')));
-    fields.appendChild(mkField('Study UID (optional)','text',cfg.studyUID,v=>cfg.studyUID=v,'1.2.840.10008…'));
-    fields.appendChild(mkInfo('Requires IDS7 ≥ 22.x with REST gateway enabled. Contact your Sectra admin for API credentials.'));
-  }else if(sys==='agfa'){
-    fields.appendChild(mkField('Agfa Impax REST URL','text',cfg.url,v=>cfg.url=v,'http://impax-server:8080/agfa'));
-    fields.appendChild(mkRow(mkField('Username','text',cfg.username,v=>cfg.username=v,'service_user'),mkField('Password','password',cfg.password,v=>cfg.password=v,'••••••')));
-    fields.appendChild(mkField('Accession Number','text',cfg.accession,v=>cfg.accession=v,'ACC-2024-001'));
-    fields.appendChild(mkInfo('Requires Impax 6.6+ with REST transcription module. Use accession number to attach to correct study.'));
-  }else if(sys==='philips'){
-    fields.appendChild(mkField('Philips Vue / IntelliSpace URL','text',cfg.url,v=>cfg.url=v,'http://vue-server:8090/vue'));
-    fields.appendChild(mkField('API Token','password',cfg.token,v=>cfg.token=v,'Bearer token from Vue admin'));
-    fields.appendChild(mkField('Study UID','text',cfg.studyUID,v=>cfg.studyUID=v,'1.2.840.10008…'));
-    fields.appendChild(mkInfo('Requires Vue PACS 3.0+ with external reporting API license. Token from Philips Vue admin console.'));
-  }else if(sys==='visage'){
-    fields.appendChild(mkField('Visage 7 API URL','text',cfg.url,v=>cfg.url=v,'http://visage-server:7070/api'));
-    fields.appendChild(mkField('API Token','password',cfg.token,v=>cfg.token=v,'Bearer token from Visage admin'));
-    fields.appendChild(mkInfo('Requires Visage 7.1.25+ with external API module. Contact your Visage site admin.'));
-  }else if(sys==='epic'){
-    fields.appendChild(mkField('Epic FHIR Base URL','text',cfg.url,v=>cfg.url=v,'https://hospital.epic.com/api/FHIR/R4'));
-    fields.appendChild(mkField('SMART Bearer Token','password',cfg.token,v=>cfg.token=v,'Obtained via SMART on FHIR auth flow'));
-    fields.appendChild(mkRow(mkField('Patient ID (FHIR)','text',cfg.patientId,v=>cfg.patientId=v,'eXyzAbc123'),mkField('Encounter ID (optional)','text',cfg.encounterId,v=>cfg.encounterId=v,'eXyzDef456')));
-    fields.appendChild(mkInfo('Requires Epic Feb 2020+ with SMART on FHIR write access. Register via Epic App Orchard.'));
-  }else{
-    fields.appendChild(mkInfo('Formats the report and copies to clipboard — paste into any RIS/PACS worklist.'));
-  }
-  cfgSection.appendChild(fields);
-  wrap.appendChild(cfgSection);
-
-  // Import search
-  if(p.mode==='import'&&sys!=='clipboard'){
-    const searchCard=document.createElement('div');
-    searchCard.style.cssText='background:var(--sur);border:.5px solid var(--bds);border-radius:var(--r);padding:14px 17px;margin-top:8px';
-    const sTitle=document.createElement('div');sTitle.className='ct';sTitle.textContent='Search Studies';
-    searchCard.appendChild(sTitle);
-    const sf=document.createElement('div');sf.className='pacs-fields';
-    sf.appendChild(mkRow(mkField('Patient ID','text',p.importQ.patientID,v=>p.importQ.patientID=v,'PAT-001'),mkField('Patient Name','text',p.importQ.patientName,v=>p.importQ.patientName=v,'Smith^John')));
-    sf.appendChild(mkRow(mkField('Study Date (YYYYMMDD)','text',p.importQ.studyDate,v=>p.importQ.studyDate=v,'20240115'),mkField('Modality','text',p.importQ.modality,v=>p.importQ.modality=v,'MR / CT')));
-    searchCard.appendChild(sf);
-    const searchBtn=document.createElement('button');searchBtn.className='btn btn-s';searchBtn.style.marginTop='10px';searchBtn.textContent='🔍 Search PACS';
-    searchBtn.addEventListener('click',searchPACS);
-    searchCard.appendChild(searchBtn);
-    if(p.studies.length){
-      const sl=document.createElement('div');sl.className='pacs-study-list';
-      p.studies.forEach(s=>{
-        const row=document.createElement('div');row.className='pacs-study-row';
-        const info=document.createElement('div');info.style.flex='1;min-width:0';
-        const desc=document.createElement('div');desc.className='pacs-study-desc';desc.textContent=s.description||'—';
-        const meta=document.createElement('div');meta.className='pacs-study-meta';
-        [s.patientName,s.studyDate,s.modality,s.seriesCount?s.seriesCount+' series':null].filter(Boolean).forEach(t=>{const sp=document.createElement('span');sp.textContent=t;meta.appendChild(sp);});
-        info.appendChild(desc);info.appendChild(meta);
-        const impBtn=document.createElement('button');impBtn.className='btn btn-g';impBtn.style.cssText='padding:3px 9px;font-size:11px';impBtn.textContent='↓ Import';
-        impBtn.addEventListener('click',()=>importStudy(s.studyUID||s.id,sys));
-        row.appendChild(info);row.appendChild(impBtn);sl.appendChild(row);
-      });
-      searchCard.appendChild(sl);
-    }
-    wrap.appendChild(searchCard);
-  }
-
-  // Status
-  if(p.status.state!=='idle'){
-    const st=document.createElement('div');st.className='pacs-status-row '+p.status.state;
-    const icon=document.createElement('span');
-    if(['testing','exporting'].includes(p.status.state)){icon.className='pacs-spinner';}
-    else{icon.textContent=['ok','done'].includes(p.status.state)?'✓':'✕';}
-    const msg=document.createElement('span');msg.textContent=p.status.message;
-    st.appendChild(icon);st.appendChild(msg);wrap.appendChild(st);
-  }
-
-  // Actions
-  const actRow=document.createElement('div');actRow.className='pacs-actions-row';
-  if(sys!=='clipboard'){
-    const testBtn=document.createElement('button');testBtn.className='btn btn-s';testBtn.textContent='⟳ Test Connection';
-    testBtn.addEventListener('click',testPACS);actRow.appendChild(testBtn);
-  }
-  if(p.mode==='export'){
-    const s=activeUID&&SM.get(activeUID);
-    const exportBtn=document.createElement('button');exportBtn.className='btn btn-p';
-    exportBtn.textContent=sys==='clipboard'?'⎘ Copy to Clipboard':'⬡ Export to PACS';
-    if(!s?.report)exportBtn.disabled=true;
-    exportBtn.addEventListener('click',exportToPACS);
-    actRow.appendChild(exportBtn);
-    if(!s?.report){const hint=document.createElement('span');hint.style.cssText='font-size:11px;color:var(--t3);margin-left:6px';hint.textContent='Generate a report first';actRow.appendChild(hint);}
-  }
-  wrap.appendChild(actRow);
-
-  root.innerHTML='';root.appendChild(wrap);
+function buildStudyContext(){
+  if(!slices.length)return 'No DICOM study loaded.';
+  const m=slices[0];
+  return `Current study: Patient ${m.patientName}, DOB ${m.patientDOB||'unknown'}, Study date ${m.studyDate||'unknown'}, Modality ${m.modality||'unknown'}, Series: ${m.seriesDesc||'unknown'}, ${slices.length} images, Institution: ${m.institution||'unknown'}.`;
 }
 
-function setPacsStatus(state,message){_pacsState.status={state,message};renderPACS();}
+/* ── REPORT ACTIONS ─────────────────────────────────────────── */
+window.clearReport=function(){
+  ['rp-narrative','sf-indication','sf-technique','sf-findings','sf-impression','sf-followup'].forEach(id=>{
+    document.getElementById(id).value='';
+  });
+  ['sf-modality','sf-contrast','sf-urgency'].forEach(id=>{
+    document.getElementById(id).value='';
+  });
+  document.getElementById('ai-output').textContent='Ask a question about the study, request a differential, or generate a structured report…';
+  document.getElementById('ai-output').className='ai-msg placeholder';
+  addAudit('Report','Report cleared');
+};
 
-function getReportText(){
-  const s=activeUID&&SM.get(activeUID);if(!s?.report)return'';
-  return['NEURORADREPORTER — AI-ASSISTED REPORT','FOR RESEARCH USE ONLY',
-    '='.repeat(60),'Series: '+s.desc,'Modality: '+s.mod,'Slices: '+s.files.length,
-    'Patient hash: '+s.hash,'Generated: '+new Date().toISOString(),'',s.report
+window.copyReport=function(){
+  const txt=document.getElementById('rp-narrative').value;
+  if(!txt){toast('Nothing to copy','warn');return;}
+  navigator.clipboard.writeText(txt).then(()=>{toast('Narrative copied','ok');addAudit('Export','Narrative report copied');});
+};
+
+window.copyStructured=function(){
+  const lines=[
+    'STRUCTURED NEURORADIOLOGY REPORT',
+    '=================================',
+    'Indication: '+(document.getElementById('sf-indication').value||'—'),
+    'Technique: '+(document.getElementById('sf-technique').value||'—'),
+    'Modality: '+(document.getElementById('sf-modality').value||'—'),
+    'Contrast: '+(document.getElementById('sf-contrast').value||'—'),
+    '',
+    'FINDINGS:',
+    document.getElementById('sf-findings').value||'—',
+    '',
+    'IMPRESSION:',
+    document.getElementById('sf-impression').value||'—',
+    '',
+    'Follow-up: '+(document.getElementById('sf-followup').value||'—'),
+    'Urgency: '+(document.getElementById('sf-urgency').value||'—'),
+    '',
+    'Report date: '+new Date().toLocaleDateString(),
+  ];
+  navigator.clipboard.writeText(lines.join('\n')).then(()=>{toast('Structured report copied','ok');});
+};
+
+window.exportHL7=function(){
+  const m=slices[0]||{};
+  const uid=crypto.randomUUID?.()|| Math.random().toString(36).slice(2);
+  const resource={
+    resourceType:'DiagnosticReport',
+    id:uid,
+    status:'final',
+    category:[{coding:[{system:'http://loinc.org',code:'RAD',display:'Radiology'}]}],
+    code:{coding:[{system:'http://loinc.org',code:'18748-4',display:'Diagnostic imaging study'}]},
+    subject:{display:m.patientName||'UNKNOWN'},
+    effectiveDateTime:fmtDate(m.studyDate)||new Date().toISOString().slice(0,10),
+    issued:new Date().toISOString(),
+    conclusion:document.getElementById('sf-impression').value||document.getElementById('rp-narrative').value,
+    presentedForm:[{contentType:'text/plain',data:btoa(document.getElementById('rp-narrative').value||'')}]
+  };
+  download('report_fhir.json',JSON.stringify(resource,null,2),'application/json');
+  toast('HL7 FHIR exported','ok');
+  addAudit('Export','HL7 FHIR DiagnosticReport exported');
+};
+
+window.exportDicomSR=function(){
+  const text=[
+    'DICOM STRUCTURED REPORT',
+    'Report Date: '+new Date().toLocaleDateString(),
+    '',
+    'Patient: '+(slices[0]?.patientName||'UNKNOWN'),
+    'Modality: '+(slices[0]?.modality||'—'),
+    '',
+    'NARRATIVE REPORT:',
+    document.getElementById('rp-narrative').value||'—',
+    '',
+    'STRUCTURED FINDINGS:',
+    document.getElementById('sf-findings').value||'—',
+    '',
+    'IMPRESSION:',
+    document.getElementById('sf-impression').value||'—',
   ].join('\n');
-}
+  download('report_dicom_sr.txt',text,'text/plain');
+  toast('DICOM SR exported','ok');
+  addAudit('Export','DICOM SR text exported');
+};
 
-async function exportToPACS(){
-  const text=getReportText();if(!text){setPacsStatus('error','Generate a report first.');return;}
-  const sys=_pacsState.system,cfg=_pacsState.cfg[sys]||{};
-  setPacsStatus('exporting','Exporting report…');
-  try{
-    if(sys==='clipboard'){
-      await navigator.clipboard.writeText(text);setPacsStatus('done','Report copied to clipboard ✓');
-    }else if(sys==='orthanc'){
-      const h={'Content-Type':'application/json'};
-      if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
-      if(cfg.studyUID){
-        const r=await fetch(`${cfg.url}/studies/${cfg.studyUID}/attachments/ai-report`,{method:'PUT',headers:{...h,'Content-Type':'text/plain'},body:text});
-        if(!r.ok)throw new Error(`Orthanc HTTP ${r.status}`);
-        setPacsStatus('done','Attached to study in Orthanc ✓');
-      }else{
-        const body={Tags:{Modality:'SR',SeriesDescription:'AI Neuroradiology Report',ContentDate:new Date().toISOString().split('T')[0].replace(/-/g,''),TextValue:text.substring(0,10240)}};
-        const r=await fetch(`${cfg.url}/tools/create-dicom`,{method:'POST',headers:h,body:JSON.stringify(body)});
-        if(!r.ok)throw new Error(`Orthanc HTTP ${r.status}`);
-        const d=await r.json();setPacsStatus('done',`Created DICOM SR in Orthanc (ID: ${d.ID}) ✓`);
-      }
-    }else if(sys==='hl7-fhir'||sys==='visage'||sys==='epic'){
-      const h={'Content-Type':'application/fhir+json','Accept':'application/fhir+json'};
-      if(cfg.token)h['Authorization']=`Bearer ${cfg.token}`;
-      const s=activeUID&&SM.get(activeUID);
-      const resource={resourceType:'DiagnosticReport',status:'final',
-        category:[{coding:[{system:'http://terminology.hl7.org/CodeSystem/v2-0074',code:'RAD'}]}],
-        code:{coding:[{system:'http://loinc.org',code:'68604-8',display:'Radiology Diagnostic study note'}]},
-        ...(sys==='epic'&&cfg.patientId?{subject:{reference:`Patient/${cfg.patientId}`}}:{}),
-        ...(sys==='epic'&&cfg.encounterId?{encounter:{reference:`Encounter/${cfg.encounterId}`}}:{}),
-        effectiveDateTime:new Date().toISOString(),issued:new Date().toISOString(),
-        presentedForm:[{contentType:'text/plain',data:btoa(unescape(encodeURIComponent(text))),title:'AI Neuroradiology Report — NeuroRadReporter'}]};
-      const url=sys==='visage'?`${cfg.url}/DiagnosticReport`:sys==='epic'?`${cfg.url}/DiagnosticReport`:`${cfg.url}/DiagnosticReport`;
-      const r=await fetch(url,{method:'POST',headers:h,body:JSON.stringify(resource)});
-      if(!r.ok){const t=await r.text();throw new Error(`${sys} HTTP ${r.status}: ${t.substring(0,150)}`);}
-      const d=await r.json();setPacsStatus('done',`DiagnosticReport created (ID: ${d.id}) ✓`);
-    }else if(sys==='dicom-web'){
-      const boundary='----DICOMwebBoundary'+Date.now();
-      const body=[`--${boundary}`,'Content-Type: application/dicom+json','',
-        JSON.stringify([{'00080060':{Value:['SR']},'0008103E':{Value:['AI Neuroradiology Report']},'0040A730':{Value:[{'0040A160':{Value:[text]}}]}}]),
-        `--${boundary}--`].join('\r\n');
-      const h={'Content-Type':`multipart/related; type="application/dicom+json"; boundary="${boundary}"`};
-      if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
-      const r=await fetch(`${cfg.url}/studies`,{method:'POST',headers:h,body});
-      if(!r.ok)throw new Error(`STOW-RS HTTP ${r.status}`);
-      setPacsStatus('done','Sent via STOW-RS ✓');
-    }else if(sys==='dicom-sr'){
-      const content=['DICOM SR — Text export',`AE: ${cfg.aeTitle||'NEURORAD'} → ${cfg.remoteAE||'PACS'}`,`Host: ${cfg.host||'—'}:${cfg.port||104}`,'',text].join('\n');
-      const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type:'text/plain'}));a.download='neurorad-report.sr.txt';a.click();
-      setPacsStatus('done','SR text file downloaded ✓');
-    }else if(sys==='sectra'){
-      const h={'Content-Type':'application/json'};
-      if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
-      const r=await fetch(`${cfg.url}/reports`,{method:'POST',headers:h,body:JSON.stringify({studyInstanceUID:cfg.studyUID||undefined,reportText:text,reportType:'NEURORAD_AI',contentDate:new Date().toISOString()}),signal:AbortSignal.timeout(10000)});
-      if(!r.ok)throw new Error(`Sectra HTTP ${r.status} — check IDS7 REST gateway`);
-      setPacsStatus('done','Report sent to Sectra IDS7 ✓');
-    }else if(sys==='agfa'){
-      const h={'Content-Type':'application/json'};
-      if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
-      const r=await fetch(`${cfg.url}/api/v1/transcriptions`,{method:'POST',headers:h,body:JSON.stringify({accessionNumber:cfg.accession||undefined,transcription:text,source:'NeuroRadReporter',date:new Date().toISOString()}),signal:AbortSignal.timeout(10000)});
-      if(!r.ok)throw new Error(`Agfa HTTP ${r.status} — check Impax REST bridge`);
-      setPacsStatus('done','Report sent to Agfa Impax ✓');
-    }else if(sys==='philips'){
-      const h={'Content-Type':'application/json'};
-      if(cfg.token)h['Authorization']=`Bearer ${cfg.token}`;
-      const r=await fetch(`${cfg.url}/api/reports`,{method:'POST',headers:h,body:JSON.stringify({studyInstanceUID:cfg.studyUID||undefined,report:text,modality:'SR',timestamp:new Date().toISOString()}),signal:AbortSignal.timeout(10000)});
-      if(!r.ok)throw new Error(`Philips Vue HTTP ${r.status}`);
-      setPacsStatus('done','Report sent to Philips Vue PACS ✓');
-    }
-    audit(`PACS export: ${sys} — success`,'ok');
-  }catch(e){setPacsStatus('error',sanitizeText(e.message));audit('PACS export error: '+sanitizeText(e.message),'warn');}
-}
+window.finalizeReport=function(){
+  const narrative=document.getElementById('rp-narrative').value;
+  const impression=document.getElementById('sf-impression').value;
+  if(!narrative&&!impression){toast('Add report content first','warn');return;}
+  addAudit('Report','Report FINALIZED by user — '+new Date().toISOString());
+  toast('Report finalized & signed','ok');
+};
 
-async function testPACS(){
-  const sys=_pacsState.system,cfg=_pacsState.cfg[sys]||{};
-  setPacsStatus('testing','Testing connection…');
-  try{
-    if(sys==='orthanc'){
-      const h={};if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
-      const r=await fetch(`${cfg.url}/system`,{headers:h,signal:AbortSignal.timeout(6000)});
-      if(!r.ok)throw new Error(`HTTP ${r.status}`);
-      const d=await r.json();setPacsStatus('ok',`Orthanc ${d.Version||''} — ${d.Name||'reachable'} ✓`);
-    }else if(sys==='hl7-fhir'||sys==='visage'||sys==='epic'){
-      const h={'Accept':'application/fhir+json'};if(cfg.token)h['Authorization']=`Bearer ${cfg.token}`;
-      const url=sys==='visage'?`${cfg.url}/metadata`:sys==='epic'?`${cfg.url}/metadata`:`${cfg.url}/metadata`;
-      const r=await fetch(url,{headers:h,signal:AbortSignal.timeout(6000)}).catch(()=>null);
-      if(!r||!r.ok){setPacsStatus('ok',`${PACS_SYSTEMS.find(s=>s.id===sys)?.label} config saved — connect test requires network access`);return;}
-      const d=await r.json().catch(()=>({}));setPacsStatus('ok',`${d.fhirVersion||'FHIR'} reachable ✓`);
-    }else if(sys==='dicom-web'){
-      const h={'Accept':'application/dicom+json'};if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
-      const r=await fetch(`${cfg.url}/studies?limit=1`,{headers:h,signal:AbortSignal.timeout(6000)});
-      if(!r.ok&&r.status!==204)throw new Error(`HTTP ${r.status}`);
-      setPacsStatus('ok','DICOMweb QIDO-RS reachable ✓');
-    }else{
-      setPacsStatus('ok',`${PACS_SYSTEMS.find(s=>s.id===sys)?.label} configuration saved — test requires direct network access to the server`);
-    }
-  }catch(e){setPacsStatus('error',sanitizeText(e.message));}
-}
+/* ── PACS ───────────────────────────────────────────────────── */
+window.renderPACS=function(){
+  const type=document.getElementById('pacs-type').value;
+  const urlEl=document.getElementById('pacs-url');
+  if(type==='orthanc')urlEl.placeholder='http://orthanc:8042';
+  else if(type==='dicomweb')urlEl.placeholder='http://server/wado/rs';
+  else urlEl.placeholder='http://fhir-server/fhir';
+};
 
-async function searchPACS(){
-  const sys=_pacsState.system,cfg=_pacsState.cfg[sys]||{},q=_pacsState.importQ;
-  setPacsStatus('testing','Searching…');_pacsState.studies=[];
+window.testPACS=async function(){
+  const url=(document.getElementById('pacs-url').value||'').trim();
+  const user=document.getElementById('pacs-user').value;
+  const pass=document.getElementById('pacs-pass').value;
+  const type=document.getElementById('pacs-type').value;
+  const dot=document.getElementById('pacs-dot');
+  const sta=document.getElementById('pacs-status');
+  dot.className='status-dot idle';sta.textContent='Testing…';
   try{
-    let studies=[];
-    if(sys==='orthanc'){
-      const query={};if(q.patientID)query.PatientID=q.patientID;if(q.patientName)query.PatientName=q.patientName;if(q.studyDate)query.StudyDate=q.studyDate;if(q.modality)query.ModalitiesInStudy=q.modality;
-      const h={'Content-Type':'application/json'};if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
-      const r=await fetch(`${cfg.url}/tools/find`,{method:'POST',headers:h,body:JSON.stringify({Level:'Study',Query:query,Expand:true}),signal:AbortSignal.timeout(10000)});
-      if(!r.ok)throw new Error(`Orthanc HTTP ${r.status}`);
-      const data=await r.json();
-      studies=(Array.isArray(data)?data:[]).map(s=>({id:s.ID,studyUID:s.MainDicomTags?.StudyInstanceUID||s.ID,patientName:s.PatientMainDicomTags?.PatientName||'',studyDate:s.MainDicomTags?.StudyDate||'',description:s.MainDicomTags?.StudyDescription||'',modality:s.MainDicomTags?.ModalitiesInStudy||'',seriesCount:s.Series?.length||0}));
-    }else if(sys==='hl7-fhir'){
-      const params=new URLSearchParams();if(q.patientID)params.append('identifier',q.patientID);if(q.studyDate)params.append('started',q.studyDate);if(q.modality)params.append('modality',q.modality);params.append('_count','20');
-      const h={'Accept':'application/fhir+json'};if(cfg.token)h['Authorization']=`Bearer ${cfg.token}`;
-      const r=await fetch(`${cfg.url}/ImagingStudy?${params}`,{headers:h,signal:AbortSignal.timeout(10000)});
-      if(!r.ok)throw new Error(`FHIR HTTP ${r.status}`);
+    const headers={'Accept':'application/json'};
+    if(user)headers['Authorization']='Basic '+btoa(user+':'+pass);
+    let testUrl=url;
+    if(type==='orthanc')testUrl=url+'/system';
+    else if(type==='dicomweb')testUrl=url+'?limit=1';
+    else testUrl=url+'/metadata';
+    const r=await fetch(testUrl,{headers,signal:AbortSignal.timeout(5000)});
+    if(r.ok){dot.className='status-dot ok';sta.textContent='Connected ('+r.status+')';}
+    else{dot.className='status-dot err';sta.textContent='HTTP '+r.status;}
+    addAudit('PACS','Connection test: '+testUrl+' → '+r.status);
+  } catch(e){
+    dot.className='status-dot err';sta.textContent='Error: '+e.message;
+    addAudit('PACS','Connection test failed: '+e.message);
+  }
+};
+
+window.searchPACS=async function(){
+  const url=(document.getElementById('pacs-url').value||'').trim();
+  const user=document.getElementById('pacs-user').value;
+  const pass=document.getElementById('pacs-pass').value;
+  const type=document.getElementById('pacs-type').value;
+  const name=document.getElementById('qs-name').value;
+  const pid=document.getElementById('qs-id').value;
+  const date=document.getElementById('qs-date').value;
+  const cont=document.getElementById('pacs-results');
+  cont.innerHTML='<div id="pacs-empty">Searching…</div>';
+
+  try{
+    const headers={'Accept':'application/json'};
+    if(user)headers['Authorization']='Basic '+btoa(user+':'+pass);
+    let searchUrl=url;
+    if(type==='orthanc'){
+      const body={};
+      if(name)body.PatientName=name;
+      if(pid)body.PatientID=pid;
+      if(date)body.StudyDate=date;
+      const r=await fetch(url+'/tools/find',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({Level:'Study',Query:body,Limit:50})});
+      if(!r.ok)throw new Error('HTTP '+r.status);
+      const ids=await r.json();
+      pacsResults=await Promise.all(ids.slice(0,20).map(async id=>{
+        const sr=await fetch(url+'/studies/'+id,{headers});
+        return sr.ok?{...await sr.json(),_id:id}:null;
+      }));
+      pacsResults=pacsResults.filter(Boolean);
+    } else if(type==='dicomweb'){
+      let qs=[];
+      if(name)qs.push('PatientName='+encodeURIComponent(name));
+      if(pid)qs.push('PatientID='+encodeURIComponent(pid));
+      if(date)qs.push('StudyDate='+encodeURIComponent(date));
+      const r=await fetch(url+(qs.length?'?'+qs.join('&'):''),{headers:{...headers,'Accept':'application/dicom+json'}});
+      if(!r.ok)throw new Error('HTTP '+r.status);
+      pacsResults=await r.json();
+    } else {
+      let qs=['_count=20'];
+      if(name)qs.push('patient.name='+encodeURIComponent(name));
+      const r=await fetch(url+'/ImagingStudy?'+qs.join('&'),{headers});
+      if(!r.ok)throw new Error('HTTP '+r.status);
       const bundle=await r.json();
-      studies=(bundle.entry||[]).map(e=>{const s=e.resource;return{id:s.id,studyUID:s.identifier?.[0]?.value||s.id,patientName:s.subject?.display||'',studyDate:s.started?.split('T')[0]||'',description:s.description||'',modality:s.modality?.[0]?.code||'',seriesCount:s.numberOfSeries||0};});
-    }else if(sys==='dicom-web'){
-      const params=new URLSearchParams();if(q.patientID)params.append('00100020',q.patientID);if(q.patientName)params.append('00100010',q.patientName);if(q.studyDate)params.append('00080020',q.studyDate);if(q.modality)params.append('00080061',q.modality);params.append('limit','20');
-      const h={'Accept':'application/dicom+json'};if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
-      const r=await fetch(`${cfg.url}/studies?${params}`,{headers:h,signal:AbortSignal.timeout(10000)});
-      if(!r.ok)throw new Error(`QIDO HTTP ${r.status}`);
-      const data=await r.json();
-      studies=(Array.isArray(data)?data:[]).map(s=>({id:s['0020000D']?.Value?.[0]||'',studyUID:s['0020000D']?.Value?.[0]||'',patientName:s['00100010']?.Value?.[0]?.Alphabetic||'',studyDate:s['00080020']?.Value?.[0]||'',description:s['00081030']?.Value?.[0]||'',modality:s['00080061']?.Value?.join('/')||'',seriesCount:s['00201206']?.Value?.[0]||0}));
+      pacsResults=(bundle.entry||[]).map(e=>e.resource);
     }
-    _pacsState.studies=studies;
-    setPacsStatus('ok',`Found ${studies.length} studies`);
-  }catch(e){setPacsStatus('error',sanitizeText(e.message));}
+    renderPACSResults();
+    addAudit('PACS','Search returned '+pacsResults.length+' results');
+  } catch(e){
+    cont.innerHTML='<div id="pacs-empty" style="color:var(--err)">Error: '+sanitizeText(e.message)+'</div>';
+    addAudit('PACS','Search error: '+e.message);
+  }
+};
+
+function renderPACSResults(){
+  const cont=document.getElementById('pacs-results');
+  if(!pacsResults.length){cont.innerHTML='<div id="pacs-empty">No studies found</div>';return;}
+  const table=document.createElement('table');
+  table.className='pacs-result-table';
+  table.innerHTML='<thead><tr><th>Patient</th><th>Date</th><th>Modality</th><th>Description</th><th></th></tr></thead>';
+  const tbody=document.createElement('tbody');
+  pacsResults.forEach((r,i)=>{
+    const name=r.PatientMainDicomTags?.PatientName||r['00100010']?.Value?.[0]?.Alphabetic||r.subject?.display||'—';
+    const date=r.MainDicomTags?.StudyDate||r['00080020']?.Value?.[0]||r.started?.slice(0,10)||'—';
+    const mod=r.MainDicomTags?.Modalities||r['00080061']?.Value?.join(',')||r.modality?.[0]?.code||'—';
+    const desc=r.MainDicomTags?.StudyDescription||r['00081030']?.Value?.[0]||r.description||'—';
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${sanitizeText(name)}</td><td>${sanitizeText(date)}</td><td>${sanitizeText(mod)}</td><td>${sanitizeText(desc)}</td><td><button class="vc-btn" onclick="importStudy(${i})">Import</button></td>`;
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  cont.innerHTML='';cont.appendChild(table);
 }
 
-async function importStudy(studyUID,source){
-  const sys=_pacsState.system,cfg=_pacsState.cfg[sys]||{};
-  setPacsStatus('exporting','Importing study…');
-  try{
-    if(sys==='orthanc'){
-      const h={};if(cfg.username&&cfg.password)h['Authorization']='Basic '+btoa(cfg.username+':'+cfg.password);
-      const r=await fetch(`${cfg.url}/studies/${studyUID}`,{headers:h,signal:AbortSignal.timeout(8000)});
-      if(!r.ok)throw new Error(`Orthanc HTTP ${r.status}`);
-      const study=await r.json();
-      const tags=study.MainDicomTags||{};
-      setPacsStatus('done',`Imported: ${tags.StudyDescription||studyUID} ✓`);
-    }else if(sys==='hl7-fhir'){
-      const h={'Accept':'application/fhir+json'};if(cfg.token)h['Authorization']=`Bearer ${cfg.token}`;
-      const r=await fetch(`${cfg.url}/ImagingStudy?identifier=${studyUID}`,{headers:h,signal:AbortSignal.timeout(8000)});
-      if(!r.ok)throw new Error(`FHIR HTTP ${r.status}`);
-      setPacsStatus('done','Study imported from FHIR ✓');
-    }
-  }catch(e){setPacsStatus('error',sanitizeText(e.message));}
+window.importStudy=function(idx){
+  const r=pacsResults[idx];
+  const name=r.PatientMainDicomTags?.PatientName||'—';
+  const date=r.MainDicomTags?.StudyDate||r.started?.slice(0,10)||'—';
+  document.getElementById('sf-indication').value='Study: '+name+' Date: '+date;
+  switchTab('reporting',document.querySelector('.tab'));
+  document.querySelectorAll('.tab')[0].click();
+  toast('Study metadata imported to report','ok');
+  addAudit('PACS','Study imported: '+name);
+};
+
+window.pushFHIR=function(){
+  const url=document.getElementById('pacs-url').value;
+  if(!url){toast('Set PACS URL first','err');return;}
+  document.getElementById('push-status').textContent='⏳ Pushing FHIR DiagnosticReport to '+url+'…';
+  setTimeout(()=>{
+    document.getElementById('push-status').textContent='✓ Report pushed (simulated — no live PACS connected)';
+    toast('FHIR push simulated','warn');
+    addAudit('PACS','FHIR push simulated (no live connection)');
+  },800);
+};
+window.pushDicomSR=function(){
+  document.getElementById('push-status').textContent='⏳ Pushing DICOM SR…';
+  setTimeout(()=>{
+    document.getElementById('push-status').textContent='✓ DICOM SR pushed (simulated)';
+    toast('DICOM SR push simulated','warn');
+    addAudit('PACS','DICOM SR push simulated');
+  },800);
+};
+
+/* ── HELPERS ────────────────────────────────────────────────── */
+function sanitizeText(s){
+  if(typeof s!=='string')s=String(s||'');
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// Wire up PACS page render when nav is clicked
-document.querySelectorAll('.ni[data-page="pacs"]').forEach(ni=>{
-  ni.addEventListener('click',()=>{setTimeout(renderPACS,0);});
+function download(filename,content,mime){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([content],{type:mime}));
+  a.download=filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* ── KEYBOARD SHORTCUTS ─────────────────────────────────────── */
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
+  if(e.key==='ArrowRight'||e.key==='ArrowDown'){renderSlice(currentSlice+1);}
+  if(e.key==='ArrowLeft'||e.key==='ArrowUp'){renderSlice(currentSlice-1);}
+  if(e.key==='i')invertToggle();
+  if(e.key==='a')autoWindow();
 });
 
-// Load saved API key from localStorage on startup
-loadSavedKey();
+/* ── MOUSE WHEEL SCROLL ON VIEWER ───────────────────────────── */
+document.getElementById('viewer-main').addEventListener('wheel',e=>{
+  e.preventDefault();
+  if(e.deltaY>0)renderSlice(currentSlice+1);
+  else renderSlice(currentSlice-1);
+},{passive:false});
 
-})(); // end IIFE
+})();
 </script>
 </body>
 </html>
