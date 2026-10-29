@@ -556,7 +556,7 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
               <div class="ov bl" id="ov-bl"></div>
               <div class="ov br" id="ov-br"></div>
             </div>
-            <div class="viewer-controls">
+            <div class="viewer-controls" id="win-presets">
               <button class="wbtn active" onclick="setWin(40,80,'Brain',this)">Brain</button>
               <button class="wbtn" onclick="setWin(400,1500,'Bone',this)">Bone</button>
               <button class="wbtn" onclick="setWin(40,400,'Soft Tissue',this)">Soft Tissue</button>
@@ -857,6 +857,7 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
 
 /* ── STATE ── */
 let slices=[], curSlice=0, wc=40, ww=80, inv=false;
+let seriesGroups={}, curSeries=null; // series grouping for multi-sequence MRI
 let auditEvents=[];
 let apiKey='';
 let settings={model:'claude-opus-4-5',tokens:2048,lang:'English',inst:'',rad:''};
@@ -1020,91 +1021,282 @@ function sha256short(s){
 function parseDICOM(buf,fname){
   const dv=new DataView(buf);
   const bytes=new Uint8Array(buf);
-  function u16(o){try{return dv.getUint16(o,true)}catch{return 0}}
-  function str(o,len){try{return new TextDecoder().decode(bytes.slice(o,o+len)).replace(/[\0\s]+$/g,'').trim()}catch{return ''}}
-  function tag(g,e){
-    for(let i=132;i<buf.byteLength-8;i+=2){
-      try{if(dv.getUint16(i,true)===g&&dv.getUint16(i+2,true)===e){
-        const vr=str(i+4,2);let len,off;
-        if(['OB','OW','SQ','UN'].includes(vr)){len=dv.getUint32(i+8,true);off=i+12;}
-        else{len=dv.getUint16(i+6,true);off=i+8;}
-        return{off,len};
-      }}catch{}
+  // Detect transfer syntax: explicit vs implicit VR
+  // DICOM preamble is 128 bytes + "DICM" magic at 128
+  const hasMagic=buf.byteLength>132&&bytes[128]===68&&bytes[129]===73&&bytes[130]===67&&bytes[131]===77;
+  let implicit=false; // will detect below
+
+  function str(o,len){
+    if(o<0||o+len>buf.byteLength)return '';
+    try{return new TextDecoder('latin1').decode(bytes.slice(o,o+len)).replace(/[\0]+$/g,'').trim();}catch{return '';}
+  }
+
+  // Scan tags — handles both explicit VR and implicit VR transfer syntaxes
+  // Returns {off, len} of value field for given group/element
+  function findTag(targetG,targetE){
+    const start=hasMagic?132:0;
+    let i=start;
+    while(i<buf.byteLength-8){
+      try{
+        const g=dv.getUint16(i,true);
+        const e=dv.getUint16(i+2,true);
+        // Try explicit VR first
+        const vrStr=str(i+4,2);
+        const isExplicit=/^[A-Z][A-Z]$/.test(vrStr) &&
+          ['AE','AS','AT','CS','DA','DS','DT','FL','FD','IS','LO','LT','OB','OD','OF','OW','PN','SH','SL','SQ','SS','ST','TM','UC','UI','UL','UN','UR','US','UT'].includes(vrStr);
+
+        let len,off,step;
+        if(isExplicit){
+          if(['OB','OD','OF','OL','OW','SQ','UC','UN','UR','UT'].includes(vrStr)){
+            // 4-byte reserved + 4-byte length
+            len=dv.getUint32(i+8,true);off=i+12;step=12+len;
+          } else {
+            // 2-byte length
+            len=dv.getUint16(i+6,true);off=i+8;step=8+len;
+          }
+        } else {
+          // Implicit VR: 4-byte length
+          len=dv.getUint32(i+4,true);off=i+8;step=8+len;
+          implicit=true;
+        }
+
+        if(g===targetG&&e===targetE) return {off,len};
+
+        // Pixel data tag — stop here regardless
+        if(g===0x7FE0&&e===0x0010) return null;
+
+        // Advance — cap step to avoid infinite loop
+        const advance=Math.max(4, step&~1); // keep word-aligned
+        if(advance<=0||advance>buf.byteLength)break;
+        i+=advance;
+      }catch{i+=2;}
     }
     return null;
   }
-  function ts(g,e){const t=tag(g,e);return t?str(t.off,t.len):''}
-  function tn(g,e){return parseInt(ts(g,e))||0}
+
+  function ts(g,e){const t=findTag(g,e);return t?str(t.off,t.len):'';}
+  function tn(g,e){const v=ts(g,e);return parseFloat(v)||0;}
+
+  const modality=(ts(0x08,0x60)||'').toUpperCase();
+  const isCT=modality==='CT';
+  const isPT=modality==='PT';
 
   const m={
-    patientName:ts(0x10,0x10)||'ANON',patientDOB:ts(0x10,0x30),
-    studyDate:ts(0x08,0x20),modality:ts(0x08,0x60),
-    seriesDesc:ts(0x08,0x103E)||ts(0x08,0x1030),
-    institution:ts(0x08,0x80),seriesUID:ts(0x20,0x0E),
-    rows:tn(0x28,0x10),cols:tn(0x28,0x11),
-    bitsAlloc:tn(0x28,0x100)||16,pixelRep:tn(0x28,0x103),
-    ri:parseFloat(ts(0x28,0x1052))||0,rs:parseFloat(ts(0x28,0x1053))||1,
-    wc:parseFloat(ts(0x28,0x1050))||40,ww:parseFloat(ts(0x28,0x1051))||80,
-    inst:tn(0x20,0x13),fname,buf
+    patientName:ts(0x10,0x10)||'ANON',
+    patientDOB:ts(0x10,0x30),
+    studyDate:ts(0x08,0x20),
+    modality,
+    seriesDesc:ts(0x08,0x103E)||ts(0x08,0x1030)||fname,
+    institution:ts(0x08,0x80),
+    seriesUID:ts(0x20,0x0E)||fname.replace(/[^a-z0-9]/gi,''),
+    seriesNum:tn(0x20,0x11),
+    instNum:tn(0x20,0x13),
+    rows:tn(0x28,0x10)||512,
+    cols:tn(0x28,0x11)||512,
+    bitsAlloc:tn(0x28,0x100)||16,
+    bitsStored:tn(0x28,0x101)||16,
+    pixelRep:tn(0x28,0x103), // 0=unsigned, 1=signed (CT is signed)
+    ri:parseFloat(ts(0x28,0x1052))||0,  // rescale intercept
+    rs:parseFloat(ts(0x28,0x1053))||1,  // rescale slope
+    wc:parseFloat(ts(0x28,0x1050))||(isCT?40:128),
+    ww:parseFloat(ts(0x28,0x1051))||(isCT?80:256),
+    fname,buf,isCT,isPT
   };
-  // find pixel data
-  for(let i=132;i<Math.min(buf.byteLength-8,600000);i+=2){
-    try{if(dv.getUint16(i,true)===0x7FE0&&dv.getUint16(i+2,true)===0x0010){
-      const vr=str(i+4,2);
-      if(vr==='OB'||vr==='OW'){m.pixOff=i+12;m.pixLen=dv.getUint32(i+8,true);}
-      else{m.pixOff=i+8;m.pixLen=dv.getUint32(i+4,true);}
-      break;
-    }}catch{}
+
+  // Find pixel data — scan for 7FE0,0010
+  const searchEnd=Math.min(buf.byteLength-12,4000000);
+  for(let i=hasMagic?132:0;i<searchEnd;i+=2){
+    try{
+      if(dv.getUint16(i,true)===0x7FE0&&dv.getUint16(i+2,true)===0x0010){
+        const vr2=str(i+4,2);
+        if(vr2==='OB'||vr2==='OW'){
+          m.pixOff=i+12;m.pixLen=dv.getUint32(i+8,true);
+        } else if(vr2==='OB'||/^[ -~]{2}$/.test(vr2)){
+          // explicit short form
+          m.pixOff=i+8;m.pixLen=dv.getUint32(i+4,true);
+        } else {
+          // implicit — 4 byte length at offset +4
+          m.pixOff=i+8;m.pixLen=dv.getUint32(i+4,true);
+        }
+        // Sanity: pixOff+pixLen should be within file
+        if(m.pixOff&&m.pixOff+m.pixLen>buf.byteLength) m.pixLen=buf.byteLength-m.pixOff;
+        break;
+      }
+    }catch{i+=2;}
   }
+
   return m;
 }
 
 /* ── VIEWER ── */
+// viewSlices = current series being viewed (subset of slices[])
+let viewSlices=[];
+
 function initViewer(){
+  // Group all slices by series
+  seriesGroups={};
+  slices.forEach(s=>{
+    const k=s.seriesUID||'_';
+    if(!seriesGroups[k])seriesGroups[k]=[];
+    seriesGroups[k].push(s);
+  });
+  // Sort each series by instance number
+  Object.values(seriesGroups).forEach(arr=>arr.sort((a,b)=>(a.instNum||0)-(b.instNum||0)));
+
+  // Pick first series
+  const firstKey=Object.keys(seriesGroups)[0];
+  loadSeries(firstKey);
+  buildSeriesSelector();
+}
+
+function loadSeries(key){
+  curSeries=key;
+  viewSlices=(seriesGroups[key]||[]);
+  if(!viewSlices.length)return;
   document.getElementById('viewer-empty').style.display='none';
   document.getElementById('main-canvas').style.display='block';
   const sl=document.getElementById('slice-slider');
-  sl.max=slices.length-1;sl.value=0;
-  if(slices[0]){wc=slices[0].wc||40;ww=slices[0].ww||80;}
-  renderSlice(0);buildFilmstrip();
+  sl.max=viewSlices.length-1;sl.value=0;
+
+  // Auto-detect modality and set windowing
+  const s0=viewSlices[0];
+  const isCT=s0.isCT;
+  updateWindowPresets(isCT);
+
+  if(isCT){
+    // CT: use DICOM window values or brain defaults
+    wc=s0.wc||40;ww=s0.ww||80;
+  } else {
+    // MRI/other: auto-window from pixel data
+    wc=null;ww=null; // trigger autoWin
+    autoWinSeries(s0);
+  }
+  curSlice=0;
+  renderSlice(0);
+  buildFilmstrip();
 }
+
+function updateWindowPresets(isCT){
+  const ctrl=document.getElementById('win-presets');
+  if(isCT){
+    ctrl.innerHTML=`
+      <button class="wbtn active" onclick="setWin(40,80,'Brain',this)">Brain</button>
+      <button class="wbtn" onclick="setWin(400,1500,'Bone',this)">Bone</button>
+      <button class="wbtn" onclick="setWin(40,400,'Soft Tissue',this)">Soft Tissue</button>
+      <button class="wbtn" onclick="setWin(75,200,'Subdural',this)">Subdural</button>
+      <button class="wbtn" onclick="setWin(350,2500,'Lung',this)">Lung</button>
+      <span style="margin-left:auto;display:flex;gap:6px">
+        <button class="wbtn" onclick="autoWin()">Auto W/L</button>
+        <button class="wbtn" onclick="invertToggle()">Invert</button>
+      </span>`;
+  } else {
+    ctrl.innerHTML=`
+      <span style="font-size:11px;color:var(--t3);padding:0 4px">MRI — Window/Level:</span>
+      <button class="wbtn active" onclick="autoWin()">Auto</button>
+      <button class="wbtn" onclick="setWin(600,1200,'Bright',this)">Bright</button>
+      <button class="wbtn" onclick="setWin(300,600,'Normal',this)">Normal</button>
+      <button class="wbtn" onclick="setWin(150,300,'Dark',this)">Dark</button>
+      <span style="margin-left:auto;display:flex;gap:6px">
+        <button class="wbtn" onclick="invertToggle()">Invert</button>
+      </span>`;
+  }
+}
+
+function buildSeriesSelector(){
+  const keys=Object.keys(seriesGroups);
+  if(keys.length<=1)return; // no selector needed for single series
+  let sel='<select id="series-sel" onchange="loadSeries(this.value)" style="font-size:12px;padding:3px 6px;border:1px solid var(--bdm);border-radius:4px;background:var(--s2);color:var(--tx);max-width:200px">';
+  keys.forEach(k=>{
+    const s=seriesGroups[k][0];
+    const label=`${s.modality||'?'} — ${s.seriesDesc||k.slice(-8)} (${seriesGroups[k].length} sl.)`;
+    sel+=`<option value="${esc(k)}">${esc(label)}</option>`;
+  });
+  sel+='</select>';
+  // Insert before viewer-controls
+  const vc=document.querySelector('.viewer-controls');
+  let existing=document.getElementById('series-sel-row');
+  if(!existing){
+    existing=document.createElement('div');
+    existing.id='series-sel-row';
+    existing.style.cssText='display:flex;align-items:center;gap:8px;padding:4px 10px;font-size:12px;color:var(--t2);border-bottom:1px solid var(--bd)';
+    existing.innerHTML='<span>Series:</span>'+sel;
+    vc.parentNode.insertBefore(existing,vc);
+  } else {
+    existing.innerHTML='<span>Series:</span>'+sel;
+  }
+}
+
+function autoWinSeries(e){
+  if(!e||!e.pixOff)return;
+  const dv=new DataView(e.buf);
+  const b2=e.bitsAlloc===16;
+  const signed=e.pixelRep===1||e.isCT; // CT is always signed
+  let mn=Infinity,mx=-Infinity;
+  const n=Math.min(e.rows*e.cols,30000);
+  for(let i=0;i<n;i++){
+    let raw;
+    if(b2){const o=e.pixOff+i*2;if(o+2>e.buf.byteLength)break;raw=signed?dv.getInt16(o,true):dv.getUint16(o,true);}
+    else{const o=e.pixOff+i;if(o>=e.buf.byteLength)break;raw=dv.getUint8(o);}
+    const hu=raw*e.rs+e.ri;
+    if(hu<mn)mn=hu;if(hu>mx)mx=hu;
+  }
+  if(mn<mx){wc=Math.round((mn+mx)/2);ww=Math.round(mx-mn);}
+  else{wc=128;ww=256;}
+}
+
 window.renderSlice=function(idx){
-  if(!slices.length)return;
-  idx=Math.max(0,Math.min(idx,slices.length-1));
+  if(!viewSlices.length)return;
+  idx=Math.max(0,Math.min(idx,viewSlices.length-1));
   curSlice=idx;
   document.getElementById('slice-slider').value=idx;
-  document.getElementById('slice-lbl').textContent=`${idx+1} / ${slices.length}`;
+  document.getElementById('slice-lbl').textContent=`${idx+1} / ${viewSlices.length}`;
   document.querySelectorAll('.fs-thumb').forEach((t,i)=>t.classList.toggle('active',i===idx));
-  const e=slices[idx];
+  const e=viewSlices[idx];
   const cv=document.getElementById('main-canvas');
   drawCanvas(e,cv);
   document.getElementById('ov-tl').textContent=e.patientName||'';
   document.getElementById('ov-tr').textContent=(e.modality||'')+' '+(e.studyDate||'');
   document.getElementById('ov-bl').textContent=e.seriesDesc||'';
-  document.getElementById('ov-br').textContent=`WC:${wc} WW:${ww}`;
+  document.getElementById('ov-br').textContent=`WC:${Math.round(wc)} WW:${Math.round(ww)}`;
 };
+
 function drawCanvas(e,cv){
-  if(!e.rows||!e.cols||!e.pixOff)return;
+  if(!e||!e.rows||!e.cols||!e.pixOff)return;
   cv.width=e.cols;cv.height=e.rows;
   const ctx=cv.getContext('2d');
   const img=ctx.createImageData(e.cols,e.rows);
   const dv=new DataView(e.buf);
-  const signed=e.pixRep===1,b2=e.bitsAlloc===16;
-  const lo=wc-ww/2,hi=wc+ww/2,n=e.rows*e.cols;
+  // CT is always signed 16-bit; MRI unsigned unless pixelRep=1
+  const signed=e.pixelRep===1||e.isCT;
+  const b2=e.bitsAlloc===16||e.bitsStored>8;
+  const lo=wc-ww/2,hi=wc+ww/2;
+  const range=hi-lo||1;
+  const n=e.rows*e.cols;
   for(let i=0;i<n;i++){
     let raw;
-    if(b2){const o=e.pixOff+i*2;if(o+1>=e.buf.byteLength)break;raw=signed?dv.getInt16(o,true):dv.getUint16(o,true);}
-    else{const o=e.pixOff+i;if(o>=e.buf.byteLength)break;raw=signed?dv.getInt8(o):dv.getUint8(o);}
-    let v=Math.round((raw*e.rs+e.ri-lo)/(hi-lo)*255);
+    if(b2){
+      const o=e.pixOff+i*2;
+      if(o+2>e.buf.byteLength)break;
+      raw=signed?dv.getInt16(o,true):dv.getUint16(o,true);
+    } else {
+      const o=e.pixOff+i;
+      if(o>=e.buf.byteLength)break;
+      raw=signed?dv.getInt8(o):dv.getUint8(o);
+    }
+    // Apply rescale slope/intercept (HU for CT, signal for MRI)
+    const hu=raw*e.rs+e.ri;
+    let v=Math.round((hu-lo)/range*255);
     v=Math.max(0,Math.min(255,v));
     if(inv)v=255-v;
-    const k=i*4;img.data[k]=v;img.data[k+1]=v;img.data[k+2]=v;img.data[k+3]=255;
+    const k=i*4;
+    img.data[k]=v;img.data[k+1]=v;img.data[k+2]=v;img.data[k+3]=255;
   }
   ctx.putImageData(img,0,0);
 }
+
 function buildFilmstrip(){
   const fs=document.getElementById('filmstrip');fs.innerHTML='';
-  slices.forEach((s,i)=>{
+  viewSlices.forEach((s,i)=>{
     const w=document.createElement('div');w.className='fs-thumb'+(i===0?' active':'');
     w.onclick=()=>renderSlice(i);
     const c=document.createElement('canvas');drawCanvas(s,c);
@@ -1119,29 +1311,41 @@ window.setWin=function(c,w,name,btn){
   audit('AI','Window: '+name);
 };
 window.autoWin=function(){
-  if(!slices.length)return;
-  const e=slices[curSlice];const dv=new DataView(e.buf);
-  let mn=Infinity,mx=-Infinity;
-  const n=Math.min(e.rows*e.cols,40000);
-  for(let i=0;i<n;i++){
-    const o=e.pixOff+i*(e.bitsAlloc===16?2:1);
-    const raw=e.bitsAlloc===16?(e.pixRep?dv.getInt16(o,true):dv.getUint16(o,true)):dv.getUint8(o);
-    const hu=raw*e.rs+e.ri;if(hu<mn)mn=hu;if(hu>mx)mx=hu;
-  }
-  wc=Math.round((mn+mx)/2);ww=Math.round(mx-mn);
+  if(!viewSlices.length)return;
+  autoWinSeries(viewSlices[curSlice]);
   renderSlice(curSlice);buildFilmstrip();
   toast('Auto W/L','ok');
 };
 window.invertToggle=function(){inv=!inv;renderSlice(curSlice);buildFilmstrip();};
 document.getElementById('viewer-main').addEventListener('wheel',e=>{
   e.preventDefault();
-  renderSlice(curSlice+(e.deltaY>0?1:-1));
+  if(viewSlices.length>1) renderSlice(curSlice+(e.deltaY>0?1:-1));
 },{passive:false});
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
   if(e.key==='ArrowRight'||e.key==='ArrowDown')renderSlice(curSlice+1);
   if(e.key==='ArrowLeft'||e.key==='ArrowUp')renderSlice(curSlice-1);
 });
+
+// Mouse-drag windowing on viewer canvas (standard DICOM UX)
+// Left-right drag = window width; Up-down drag = window center
+(function(){
+  let dragging=false,startX=0,startY=0,startWC=0,startWW=0;
+  const vm=document.getElementById('viewer-main');
+  vm.addEventListener('mousedown',e=>{
+    if(e.button!==0||!viewSlices.length)return;
+    dragging=true;startX=e.clientX;startY=e.clientY;startWC=wc;startWW=ww;
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove',e=>{
+    if(!dragging)return;
+    const dx=e.clientX-startX,dy=e.clientY-startY;
+    ww=Math.max(1,startWW+dx*4);
+    wc=startWC-dy*2;
+    renderSlice(curSlice);
+  });
+  document.addEventListener('mouseup',()=>{if(dragging){dragging=false;buildFilmstrip();}});
+})();
 
 /* ── AI ── */
 window.sendChat=async function(){
@@ -1162,7 +1366,8 @@ window.sendChat=async function(){
   document.getElementById('chat-send').disabled=true;
   audit('AI','Prompt: '+prompt.slice(0,80));
 
-  const ctx=slices.length?`Study: ${slices[0].patientName}, modality ${slices[0].modality}, series ${slices[0].seriesDesc}, ${slices.length} images.`:'No DICOM loaded.';
+  const vs=viewSlices.length?viewSlices:slices;
+  const ctx=vs.length?`Study: ${vs[0].patientName||'ANON'}, modality ${vs[0].modality||'unknown'}, series "${vs[0].seriesDesc||''}", ${vs.length} images. Patient DOB: ${vs[0].patientDOB||'unknown'}. Study date: ${vs[0].studyDate||'unknown'}.`:'No DICOM loaded.';
   try{
     const r=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
