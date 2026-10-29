@@ -427,6 +427,8 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
   .form-grid{grid-template-columns:1fr}
 }
 </style>
+<!-- UTIF.js: lightweight TIFF decoder (MIT licence) -->
+<script src="https://cdn.jsdelivr.net/npm/utif2@4.1.0/UTIF.js"></script>
 </head>
 <body>
 <div id="app">
@@ -576,9 +578,9 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
                ondragleave="this.classList.remove('over')"
                ondrop="this.classList.remove('over');event.preventDefault();loadFiles(event.dataTransfer.files)">
             <div class="drop-icon">⬆</div>
-            <div class="drop-txt">Drop DICOM series files here<br/>Multiple .dcm files — auto-grouped by Series Instance UID · <a>browse files</a></div>
+            <div class="drop-txt">Drop images here — DICOM (.dcm), PNG, JPEG or TIFF<br/>Multiple files supported · DICOM auto-grouped by Series UID · <a>browse files</a></div>
           </div>
-          <input id="file-input" type="file" accept=".dcm,application/dicom" multiple style="display:none" onchange="loadFiles(this.files)"/>
+          <input id="file-input" type="file" accept=".dcm,application/dicom,.png,.jpg,.jpeg,.tif,.tiff,image/png,image/jpeg,image/tiff" multiple style="display:none" onchange="loadFiles(this.files)"/>
 
           <div class="card">
             <div class="card-hdr">🏷️ Tags anonymized via SHA-256 (HIPAA §164.514 identifiers)</div>
@@ -1186,27 +1188,99 @@ function toast(msg,type){
 }
 
 /* ── DICOM LOADING ── */
+/* ── Raster image loader (PNG / JPEG / TIFF) ─────────────────────────────── */
+// Returns a pseudo-slice object compatible with drawCanvas() for raster images.
+function makeRasterSlice(fname, imgEl, w, h){
+  return {
+    raster:true, imgEl,
+    cols:w, rows:h,
+    fname, seriesUID:'raster-'+fname,
+    seriesDesc:fname, modality:'IMG',
+    patientName:'ANON', patientDOB:'', studyDate:'',
+    inst:0, rs:1, ri:0, bitsStored:8, pixelRep:0, isCT:false
+  };
+}
+
+function loadRasterFile(f, onDone, onErr){
+  const ext=f.name.split('.').pop().toLowerCase();
+  if(ext==='tif'||ext==='tiff'){
+    const fr=new FileReader();
+    fr.onload=ev=>{
+      try{
+        if(typeof UTIF==='undefined') throw new Error('UTIF not loaded');
+        const ifds=UTIF.decode(ev.target.result);
+        UTIF.decodeImages(ev.target.result,ifds);
+        ifds.forEach((ifd,i)=>{
+          const rgba=UTIF.toRGBA8(ifd);
+          const cv=document.createElement('canvas');
+          cv.width=ifd.width; cv.height=ifd.height;
+          const ctx=cv.getContext('2d');
+          const id=ctx.createImageData(ifd.width,ifd.height);
+          id.data.set(rgba);
+          ctx.putImageData(id,0,0);
+          // Convert to an img element so drawCanvas can handle it uniformly
+          const img=new Image();
+          img.src=cv.toDataURL('image/png');
+          const sl=makeRasterSlice(f.name+(ifds.length>1?'['+(i+1)+']':''), img, ifd.width, ifd.height);
+          sl.inst=i;
+          onDone(sl);
+        });
+      }catch(e){onErr(e);}
+    };
+    fr.readAsArrayBuffer(f);
+  } else {
+    // PNG / JPEG — use browser native decoding
+    const url=URL.createObjectURL(f);
+    const img=new Image();
+    img.onload=()=>{
+      const sl=makeRasterSlice(f.name, img, img.naturalWidth, img.naturalHeight);
+      URL.revokeObjectURL(url);
+      onDone(sl);
+    };
+    img.onerror=()=>{URL.revokeObjectURL(url);onErr(new Error('decode failed'));};
+    img.src=url;
+  }
+}
+
 window.loadFiles=function(files){
   if(!files||!files.length)return;
   slices=[];curSlice=0;
   let done=0,errs=0;
-  const arr=Array.from(files).slice(0,200).sort((a,b)=>a.name.localeCompare(b.name));
+  const arr=Array.from(files).slice(0,1000).sort((a,b)=>a.name.localeCompare(b.name));
   document.getElementById('st-total').textContent=arr.length;
+
+  const rasterExts=new Set(['png','jpg','jpeg','tif','tiff']);
+  function isDICOM(f){
+    const ext=f.name.split('.').pop().toLowerCase();
+    return ext==='dcm'||f.type==='application/dicom'||(!rasterExts.has(ext)&&f.type==='');
+  }
+
+  // We collect results asynchronously; raster files may fire multiple slices (multi-page TIFF)
+  let pending=arr.length;
+  function onSlice(sl){ slices.push(sl); }
+  function finish(){
+    slices.sort((a,b)=>(a.inst||0)-(b.inst||0));
+    updateStats();
+    buildSeriesTable();
+    if(slices.length){initViewer();}
+    audit('ANON',`Loaded ${slices.length} images, ${errs} errors`);
+    toast(`Loaded ${slices.length} image(s)`,'ok');
+  }
+
   arr.forEach(f=>{
-    const fr=new FileReader();
-    fr.onload=e=>{
-      try{slices.push(parseDICOM(e.target.result,f.name));}catch{errs++;}
-      done++;
-      if(done===arr.length){
-        slices.sort((a,b)=>(a.inst||0)-(b.inst||0));
-        updateStats();
-        buildSeriesTable();
-        if(slices.length){initViewer();}
-        audit('ANON',`Loaded ${slices.length} files, ${errs} errors`);
-        toast(`Loaded ${slices.length} image(s)`,'ok');
-      }
-    };
-    fr.readAsArrayBuffer(f);
+    if(isDICOM(f)){
+      const fr=new FileReader();
+      fr.onload=e=>{
+        try{onSlice(parseDICOM(e.target.result,f.name));}catch{errs++;}
+        if(--pending===0) finish();
+      };
+      fr.readAsArrayBuffer(f);
+    } else {
+      loadRasterFile(f,
+        sl=>{onSlice(sl); if(--pending===0) finish();},
+        ()=>{errs++; if(--pending===0) finish();}
+      );
+    }
   });
 };
 
@@ -1231,7 +1305,10 @@ function buildSeriesTable(){
   tbody.innerHTML='';
   Object.values(groups).forEach(g=>{
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${esc(g.desc||'—')}</td><td>${esc(g.mod||'—')}</td><td>${g.slices.length}</td><td style="font-family:var(--mono);font-size:10px">${esc((g.uid||'').slice(0,20))}…</td><td><span class="pill ok">Anonymized</span></td><td style="font-family:var(--mono);font-size:10px">${g.hash}</td><td><button class="btn sm" onclick="nav('ai',null)">→ Report</button></td>`;
+    const isRaster=g.slices.some(s=>s.raster);
+    const modLabel=isRaster?'🖼 Image':esc(g.mod||'—');
+    const uidLabel=isRaster?esc(g.desc||'—'):(esc((g.uid||'').slice(0,20))+'…');
+    tr.innerHTML=`<td>${esc(g.desc||'—')}</td><td>${modLabel}</td><td>${g.slices.length}</td><td style="font-family:var(--mono);font-size:10px">${uidLabel}</td><td><span class="pill ok">${isRaster?'Loaded':'Anonymized'}</span></td><td style="font-family:var(--mono);font-size:10px">${g.hash}</td><td><button class="btn sm" onclick="nav('ai',null)">→ Report</button></td>`;
     tbody.appendChild(tr);
   });
 }
@@ -1521,7 +1598,14 @@ window.renderSlice=function(idx){
 };
 
 function drawCanvas(e,cv){
-  if(!e||!e.rows||!e.cols||!e.pixOff)return;
+  if(!e||!e.rows||!e.cols)return;
+  // Raster image (PNG/JPEG/TIFF) — draw directly; window/level ignored
+  if(e.raster&&e.imgEl){
+    cv.width=e.cols; cv.height=e.rows;
+    cv.getContext('2d').drawImage(e.imgEl,0,0,e.cols,e.rows);
+    return;
+  }
+  if(!e.pixOff)return;
   cv.width=e.cols;cv.height=e.rows;
   const ctx=cv.getContext('2d');
   const img=ctx.createImageData(e.cols,e.rows);
@@ -1628,7 +1712,11 @@ window.sendChat=async function(){
   audit('AI','Prompt: '+prompt.slice(0,80));
 
   const vs=viewSlices.length?viewSlices:slices;
-  const ctx=vs.length?`Study ID: ${anonPID(vs[0].patientName)}, modality ${vs[0].modality||'unknown'}, series "${vs[0].seriesDesc||''}", ${vs.length} images. Patient year of birth: ${anonDOB(vs[0].patientDOB)}. Study date: ${anonDate(vs[0].studyDate)}.`:'No DICOM loaded.';
+  const isRasterStudy=vs.length&&vs[0].raster;
+  const ctx=vs.length?(isRasterStudy
+    ?`Image study: ${vs.length} raster image(s) (${vs[0].seriesDesc||'unknown filename'}). No DICOM metadata — analyse visual content only.`
+    :`Study ID: ${anonPID(vs[0].patientName)}, modality ${vs[0].modality||'unknown'}, series "${vs[0].seriesDesc||''}", ${vs.length} images. Patient year of birth: ${anonDOB(vs[0].patientDOB)}. Study date: ${anonDate(vs[0].studyDate)}.`)
+    :'No images loaded.';
 
   // RAG: fetch similar cases from enabled sources
   let ragContext='';
