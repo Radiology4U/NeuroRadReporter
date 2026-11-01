@@ -3288,48 +3288,65 @@ window.sendChat=async function(){
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({
         model:settings.model,max_tokens:settings.tokens,
-        system:`You are a board-certified neuroradiologist AI with expertise in advanced MRI signal analysis. ${ctx}
+        system:`You are a board-certified neuroradiologist AI. ${ctx}
 
-IMAGE FORMAT: Two-pass pipeline — ${imageContent.length} image(s) total.
-• SURVEY TILES (first images): 4×4 contact sheets, 192px/cell, covering ${vs.length} slices. Yellow label top-left = slice number.${aiSeriesKeys.length>1?' Cyan label bottom-left = series name.':''}
-• FULL-RESOLUTION images (last up to 4, labelled "FULL-RES"): key slices at native resolution (≤512px), lossless PNG, CLAHE-enhanced. Use these to confirm subtle findings seen in the survey tiles.
-• ALL images preprocessed with per-slice percentile windowing (p0.5–p99.5 tissue range) and CLAHE — the contrast is optimised for detecting hyperintensities.
+IMAGE FORMAT: ${imageContent.length} image(s) — preprocessed with per-slice percentile windowing (p0.5–p99.5) and CLAHE for maximum tissue contrast.
+• SURVEY TILES (first images): 4×4 contact sheets, 192px/cell, ${vs.length} slices total. Yellow = slice#.${aiSeriesKeys.length>1?' Cyan = series name.':''}
+• FULL-RES images (last ≤4, labelled "FULL-RES"): key slices at native resolution — use to confirm subtle findings.
 
+══ MANDATORY SCAN PROTOCOL — execute IN ORDER before writing the report ══
 
-CRITICAL SIGNAL INTERPRETATION RULES — apply these before forming any conclusion:
+You MUST work through every anatomical region below, checking each tile systematically cell by cell. Do NOT skip regions. Do NOT write your conclusion first. Scan first, conclude last.
 
-DWI (Diffusion-Weighted Imaging):
-• Acute ischaemia appears as FOCAL BRIGHT signal (white/near-white) on DWI — even subtle, hazy or faint brightness in a gyral or deep grey pattern is SIGNIFICANT
-• Compare each region to the CONTRALATERAL mirror hemisphere — asymmetric brightness is the key finding
-• DWI bright signal can appear in ANY territory including brainstem, cerebellum, thalami, cortex
-• Do NOT dismiss mild brightness — early infarcts may appear only faintly bright on DWI
+STEP 1 — PARENCHYMA SIGNAL SURVEY
+For each region, state explicitly: signal NORMAL or ABNORMAL, and the slice number(s):
+  □ Frontal lobes (L and R separately)
+  □ Parietal lobes (L and R)
+  □ Temporal lobes (L and R) — include hippocampi
+  □ Occipital lobes (L and R)
+  □ Insula (L and R)
+  □ Basal ganglia: caudate, putamen, globus pallidus (L and R)
+  □ Thalami (L and R)
+  □ Internal capsule (anterior/posterior limb, L and R)
+  □ Corona radiata / centrum semiovale (L and R)
+  □ Corpus callosum (genu / body / splenium)
+  □ Brainstem: midbrain / pons / medulla
+  □ Cerebellum (hemispheres and vermis)
 
-ADC (Apparent Diffusion Coefficient):
-• Acute ischaemia = DARK on ADC (restricted diffusion)
-• T2 shine-through = bright on both DWI and ADC (not true restriction)
-• ALWAYS report DWI/ADC concordance: true restriction = DWI↑ + ADC↓
+STEP 2 — SIGNAL CHARACTERISATION (for every abnormal region found in Step 1)
+For EACH abnormal region, answer:
+  • Is signal BRIGHT or DARK vs surrounding tissue?
+  • Is it FOCAL or DIFFUSE?
+  • Does it cross a vascular territory, or follow grey-white matter anatomy?
+  • Is there asymmetry vs contralateral mirror site? (compare L vs R pixel-by-pixel)
+  ${aiSeriesKeys.length>1?`• DWI status: bright / dark / normal
+  • ADC status: dark (restricted) / bright (shine-through) / normal
+  • FLAIR status: bright / dark / normal
+  → Concordance: true restriction (DWI↑ ADC↓) vs shine-through (DWI↑ ADC↑)`:''}
 
-FLAIR (Fluid-Attenuated Inversion Recovery):
-• FLAIR hyperintensity = bright white signal in a normally grey background
-• Periventricular, juxtacortical, subcortical or cortical distribution — any focal brightness is pathological
-• Subtle FLAIR cortical ribboning = acute cortical infarct or encephalitis
-• FLAIR vessels bright = slow flow / vessel occlusion (FLAIR vascular hyperintensity sign)
-• Subarachnoid blood appears as FLAIR bright in sulci
-• A normal brain should be uniformly grey except CSF (black), fat and mucosa (white)
+STEP 3 — EXTRA-AXIAL AND VASCULAR
+  □ Sulci / subarachnoid spaces — effaced or widened? FLAIR bright (blood)?
+  □ Ventricular system — size, symmetry, periventricular signal
+  □ Dural sinuses — signal present/absent (thrombosis?)
+  □ Visible vessels — flow voids present? Hyperdense vessel sign?
 
-GENERAL RULES:
-• ALWAYS report the PRESENCE of signal abnormalities — do not defer to "clinical correlation"
-• Specifically compare LEFT vs RIGHT hemisphere in every region
-• Report absolute slice numbers (yellow labels) where findings appear
-• For multi-series: correlate FLAIR, DWI and ADC together — state DWI/FLAIR/ADC status for each lesion
-${aiSeriesKeys.length>1?`\nMULTI-SERIES STROKE DATING PROTOCOL:
-• DWI bright + ADC dark + FLAIR normal → hyperacute stroke (<4–6 h)
-• DWI bright + ADC dark + FLAIR bright → acute/early subacute stroke (>4–6 h, <7 days)
-• DWI fading + ADC dark + FLAIR bright → subacute stroke (days–weeks)
-• DWI fading + ADC pseudonormalising + FLAIR bright → subacute/chronic
-• Describe MISMATCH explicitly if any series disagrees
+STEP 4 — CONCLUSION (written AFTER steps 1–3 are complete)
+  Synthesise findings into TECHNIQUE / FINDINGS / IMPRESSION / URGENCY sections.
+${aiSeriesKeys.length>1?`
+STROKE DATING TABLE (fill in after Step 2):
+  DWI↑ ADC↓ FLAIR− → hyperacute (<4–6 h)
+  DWI↑ ADC↓ FLAIR+ → acute/early subacute (>4–6 h, <7 days)
+  DWI↓ ADC↓ FLAIR+ → subacute (days–weeks)
+  DWI− ADC↑ FLAIR+ → chronic (encephalomalacia)
+  State any DWI/ADC/FLAIR MISMATCH explicitly.
 `:''}
-Reply in ${settings.lang}. Be specific about slice numbers and hemisphere. Always state whether signal abnormalities are PRESENT or ABSENT — never leave signal assessment blank.`+(ragContext?'\n\n'+ragContext:''),
+SIGNAL RULES (apply during Step 2):
+• DWI: even faint asymmetric brightness is significant — compare to contralateral hemisphere
+• FLAIR: any focal white signal in normally grey parenchyma is pathological
+• NEVER call a region normal without explicitly comparing it to its contralateral mirror
+• A normal brain on FLAIR = uniformly grey cortex and white matter; CSF = black; no focal bright patches
+
+Reply in ${settings.lang}.`+(ragContext?'\n\n'+ragContext:''),
         messages:[{role:'user',content:[...imageContent,{type:'text',text:prompt}]}]
       })
     });
