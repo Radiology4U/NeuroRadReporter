@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>NeuroRadReporter Pipeline</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d1117;color:#e6edf3;font-family:'Segoe UI',system-ui,sans-serif;font-size:13px;padding:24px 16px;min-height:100vh}
+h1{text-align:center;font-size:18px;font-weight:700;color:#58a6ff;margin-bottom:6px;letter-spacing:.5px}
+.sub{text-align:center;color:#8b949e;font-size:12px;margin-bottom:28px}
+
+/* ── Layout ── */
+.pipeline{display:flex;flex-direction:column;gap:0;max-width:900px;margin:0 auto}
+
+/* ── Stage card ── */
+.stage{display:grid;grid-template-columns:36px 1fr;gap:0;position:relative}
+.stage:not(:last-child)::after{content:'';position:absolute;left:17px;top:100%;width:2px;height:20px;background:linear-gradient(180deg,#30363d,#30363d);z-index:0}
+.connector{width:36px;display:flex;flex-direction:column;align-items:center;padding-top:14px;z-index:1}
+.connector .dot{width:14px;height:14px;border-radius:50%;border:2px solid;flex-shrink:0}
+.connector .line{width:2px;flex:1;background:#30363d;margin-top:2px}
+
+.card{border:1px solid #30363d;border-radius:10px;padding:14px 16px;margin-bottom:20px;background:#161b22;position:relative}
+.card-hdr{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.icon{font-size:18px;line-height:1}
+.stage-name{font-weight:700;font-size:13px}
+.stage-num{font-size:10px;font-weight:600;padding:2px 7px;border-radius:20px;background:#21262d;color:#8b949e}
+
+.rows{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.pill{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;border:1px solid;white-space:nowrap}
+
+.note{font-size:11px;color:#8b949e;margin-top:8px;line-height:1.5}
+.note b{color:#c9d1d9}
+
+/* ── Colour themes per layer ── */
+.c-input  .dot{border-color:#58a6ff;background:#1c2f4a}
+.c-input  .card{border-color:#1f3d5a}
+.c-input  .stage-name{color:#58a6ff}
+
+.c-parse  .dot{border-color:#d2a8ff;background:#2a1f3d}
+.c-parse  .card{border-color:#3d2a5a}
+.c-parse  .stage-name{color:#d2a8ff}
+
+.c-anon   .dot{border-color:#ffa657;background:#3d2a1f}
+.c-anon   .card{border-color:#5a3d1f}
+.c-anon   .stage-name{color:#ffa657}
+
+.c-series .dot{border-color:#7ee787;background:#1f3d25}
+.c-series .card{border-color:#2a5a30}
+.c-series .stage-name{color:#7ee787}
+
+.c-img    .dot{border-color:#f78166;background:#3d1f1f}
+.c-img    .card{border-color:#5a2a2a}
+.c-img    .stage-name{color:#f78166}
+
+.c-rag    .dot{border-color:#79c0ff;background:#1c2f3d}
+.c-rag    .card{border-color:#1f3a5a}
+.c-rag    .stage-name{color:#79c0ff}
+
+.c-ai     .dot{border-color:#e3b341;background:#3d2f1a}
+.c-ai     .card{border-color:#5a441a}
+.c-ai     .stage-name{color:#e3b341}
+
+.c-scan   .dot{border-color:#ff7b72;background:#3d1f1f}
+.c-scan   .card{border-color:#6d1f1f}
+.c-scan   .stage-name{color:#ff7b72}
+
+.c-out    .dot{border-color:#56d364;background:#1f3d25}
+.c-out    .card{border-color:#1a4d1f}
+.c-out    .stage-name{color:#56d364}
+
+/* ── Inline flow diagrams ── */
+.flow{display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:8px}
+.fbox{padding:3px 9px;border-radius:6px;font-size:11px;font-weight:600;background:#21262d;border:1px solid #30363d;white-space:nowrap}
+.farr{color:#8b949e;font-size:14px;line-height:1}
+.fbold{background:#1c2f3d;border-color:#58a6ff;color:#58a6ff}
+.fred{background:#3d1f1f;border-color:#f78166;color:#f78166}
+.fgrn{background:#1f3d25;border-color:#7ee787;color:#7ee787}
+.fyel{background:#3d2f1a;border-color:#e3b341;color:#e3b341}
+.forng{background:#3d2a1f;border-color:#ffa657;color:#ffa657}
+.fpurp{background:#2a1f3d;border-color:#d2a8ff;color:#d2a8ff}
+
+/* ── Two-column sub-grid ── */
+.twin{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+.twin-box{background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px 12px}
+.twin-box h3{font-size:11px;font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+
+/* ── Anatomy grid ── */
+.anatomy-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:8px}
+.anat{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:5px 8px;font-size:11px}
+.anat.key{border-color:#ff7b72;color:#ff7b72;font-weight:700}
+
+/* ── Legend ── */
+.legend{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:16px;padding-top:14px;border-top:1px solid #21262d}
+.leg{display:flex;align-items:center;gap:4px;font-size:11px;color:#8b949e}
+.leg-dot{width:10px;height:10px;border-radius:50%;border:2px solid}
+</style>
+</head>
+<body>
+<h1>🧠 NeuroRadReporter — AI Pipeline</h1>
+<div class="sub">End-to-end flow from DICOM/image input to structured report · v9b99efa</div>
+
+<div class="pipeline">
+
+<!-- ① INPUT -->
+<div class="stage c-input">
+  <div class="connector"><div class="dot"></div><div class="line"></div></div>
+  <div class="card">
+    <div class="card-hdr"><span class="icon">📂</span><span class="stage-name">1 — File Ingestion</span><span class="stage-num">ACCUMULATIVE</span></div>
+    <div class="flow">
+      <span class="fbox fbold">Drag & Drop / Browse</span><span class="farr">→</span>
+      <span class="fbox">isDICOM(f)</span><span class="farr">→</span>
+      <span class="fbox">FileReader.readAsArrayBuffer</span><span class="farr">+</span>
+      <span class="fbox">loadRasterFile(PNG/JPEG/TIFF)</span>
+    </div>
+    <div class="rows">
+      <span class="pill" style="border-color:#58a6ff;color:#58a6ff">DICOM (.dcm, extensionless)</span>
+      <span class="pill" style="border-color:#7ee787;color:#7ee787">PNG / JPEG</span>
+      <span class="pill" style="border-color:#ffa657;color:#ffa657">TIFF (multi-page via UTIF.js)</span>
+      <span class="pill" style="border-color:#d2a8ff;color:#d2a8ff">Multi-drop accumulation</span>
+    </div>
+    <div class="note">De-duplication by <b>seriesUID + instNum + filename</b>. Each drop adds to existing slices[]. "Clear all" resets explicitly. Max 1000 files/drop.</div>
+  </div>
+</div>
+
+<!-- ② PARSE -->
+<div class="stage c-parse">
+  <div class="connector"><div class="dot"></div><div class="line"></div></div>
+  <div class="card">
+    <div class="card-hdr"><span class="icon">🔬</span><span class="stage-name">2 — DICOM / Raster Parsing</span><span class="stage-num">PER FILE</span></div>
+    <div class="twin">
+      <div class="twin-box">
+        <h3 style="color:#d2a8ff">DICOM parser (parseDICOM)</h3>
+        <div class="flow" style="flex-direction:column;align-items:flex-start;gap:3px">
+          <span class="fbox fpurp">Tag walk — groups 0008/0010/0018/0020/0028</span>
+          <span class="fbox fpurp">PixelData offset detection</span>
+          <span class="fbox fpurp">rescaleSlope/Intercept (rs/ri)</span>
+          <span class="fbox fpurp">seriesUID → fallback: modality+seriesNum</span>
+          <span class="fbox fpurp">instNum, bitsAlloc, pixelRep, isCT</span>
+        </div>
+      </div>
+      <div class="twin-box">
+        <h3 style="color:#7ee787">Raster parser (makeRasterSlice)</h3>
+        <div class="flow" style="flex-direction:column;align-items:flex-start;gap:3px">
+          <span class="fbox fgrn">PNG/JPEG → &lt;img&gt; via URL.createObjectURL</span>
+          <span class="fbox fgrn">TIFF → UTIF.decode → UTIF.decodeImage → RGBA8</span>
+          <span class="fbox fgrn">Multi-page TIFF → one slice per IFD</span>
+          <span class="fbox fgrn">modality=IMG, seriesUID=raster-filename</span>
+        </div>
+      </div>
+    </div>
+    <div class="note">All slices stored in global <b>slices[]</b> and sorted by seriesNum → instNum.</div>
+  </div>
+</div>
+
+<!-- ③ ANON -->
+<div class="stage c-anon">
+  <div class="connector"><div class="dot"></div><div class="line"></div></div>
+  <div class="card">
+    <div class="card-hdr"><span class="icon">🔒</span><span class="stage-name">3 — Anonymisation (HIPAA §164.514)</span><span class="stage-num">IN-MEMORY</span></div>
+    <div class="rows">
+      <span class="pill forng">anonPID → SHA-256(patientName) → "Patient-3A7F"</span>
+      <span class="pill forng">anonDOB → year only</span>
+      <span class="pill forng">anonDate → year + month</span>
+    </div>
+    <div class="note">Raw pixel data and original tags stay in memory for rendering. Only anonymised strings enter the <b>AI context</b> and <b>audit log</b>. Multi-patient: all unique anonPIDs listed with ⚠ warning in AI prompt.</div>
+  </div>
+</div>
+
+<!-- ④ SERIES -->
+<div class="stage c-series">
+  <div class="connector"><div class="dot"></div><div class="line"></div></div>
+  <div class="card">
+    <div class="card-hdr"><span class="icon">📋</span><span class="stage-name">4 — Series Grouping &amp; Viewer</span><span class="stage-num">VIEWER</span></div>
+    <div class="flow">
+      <span class="fbox fgrn">buildSeriesTable()</span><span class="farr">→</span>
+      <span class="fbox fgrn">seriesGroups{uid→slices[]}</span><span class="farr">→</span>
+      <span class="fbox fgrn">Chip panel per series</span><span class="farr">→</span>
+      <span class="fbox fgrn">☑ checkbox = include in AI</span>
+    </div>
+    <div class="note"><b>Window/Level</b>: CT uses DICOM WC/WW tags. MRI uses percentile windowing (p2–p98, background-excluded histogram). Mouse drag = W/L adjust. Multi-series interleaving for AI analysis.</div>
+  </div>
+</div>
+
+<!-- ⑤ IMAGE PREPROCESSING -->
+<div class="stage c-img">
+  <div class="connector"><div class="dot"></div><div class="line"></div></div>
+  <div class="card">
+    <div class="card-hdr"><span class="icon">🖼</span><span class="stage-name">5 — AI Image Preprocessing Pipeline</span><span class="stage-num">AI TILES</span></div>
+    <div class="twin">
+      <div class="twin-box">
+        <h3 style="color:#f78166">Step A — Per-slice optimal windowing</h3>
+        <div class="flow" style="flex-direction:column;align-items:flex-start;gap:3px">
+          <span class="fbox fred">computeSliceHistogram(slice)</span>
+          <span class="fbox fred">Exclude background (&lt;5% of mean)</span>
+          <span class="fbox fred">percentilesFromVals(p0.5, p99.5)</span>
+          <span class="fbox fred">→ per-slice wc/ww (not global viewer W/L)</span>
+          <span class="fbox" style="border-color:#8b949e;color:#8b949e;font-size:10px">CT: keeps viewer W/L (user-set)</span>
+        </div>
+      </div>
+      <div class="twin-box">
+        <h3 style="color:#f78166">Step B — CLAHE enhancement</h3>
+        <div class="flow" style="flex-direction:column;align-items:flex-start;gap:3px">
+          <span class="fbox fred">8×8 tile grid on each cell</span>
+          <span class="fbox fred">Clip limit 3.0 (prevents noise amp)</span>
+          <span class="fbox fred">Bilinear interpolation (no block artifacts)</span>
+          <span class="fbox fred">Applied AFTER windowing, AI-pipeline only</span>
+          <span class="fbox" style="border-color:#8b949e;color:#8b949e;font-size:10px">Viewer display unchanged</span>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:10px;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px 12px">
+      <h3 style="color:#f78166;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Step C — Two-pass tile construction</h3>
+      <div class="flow">
+        <span class="fbox fred"><b>Pass 1 — Survey</b></span><span class="farr">:</span>
+        <span class="fbox">4×4 grid · 192px/cell · 768px tile</span><span class="farr">→</span>
+        <span class="fbox">up to 640 slices · ≤38 tiles</span><span class="farr">→</span>
+        <span class="fbox fgrn">MRI: lossless PNG</span>
+        <span class="fbox fyel">CT: JPEG 88%</span>
+      </div>
+      <div class="flow" style="margin-top:5px">
+        <span class="fbox fred"><b>Pass 2 — Full-res crops</b></span><span class="farr">:</span>
+        <span class="fbox">4 key slices (current + middle ⅓)</span><span class="farr">→</span>
+        <span class="fbox">Native res ≤512px · lossless PNG · CLAHE</span><span class="farr">→</span>
+        <span class="fbox fgrn">MRI only</span>
+      </div>
+      <div class="note" style="margin-top:6px">Series label (cyan, bottom-left of cell) in multi-series mode. Yellow slice# top-left. Series interleaved round-robin so DWI/ADC/FLAIR cells are adjacent.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ⑥ RAG -->
+<div class="stage c-rag">
+  <div class="connector"><div class="dot"></div><div class="line"></div></div>
+  <div class="card">
+    <div class="card-hdr"><span class="icon">📚</span><span class="stage-name">6 — RAG Context Injection</span><span class="stage-num">PARALLEL</span></div>
+    <div class="twin">
+      <div class="twin-box">
+        <h3 style="color:#79c0ff">PubMed (NCBI eutils)</h3>
+        <div class="flow" style="flex-direction:column;align-items:flex-start;gap:3px">
+          <span class="fbox fbold">esearch: neuroradiology + prompt keywords</span>
+          <span class="fbox fbold">esummary: top 3 PMIDs → title+journal+year</span>
+          <span class="fbox fbold">Appended as "## PubMed References"</span>
+        </div>
+      </div>
+      <div class="twin-box">
+        <h3 style="color:#79c0ff">Radiopaedia (static, 50 curated cases)</h3>
+        <div class="flow" style="flex-direction:column;align-items:flex-start;gap:3px">
+          <span class="fbox fbold">Keyword match on prompt + series desc</span>
+          <span class="fbox fbold">50 cases: dx string + case URL</span>
+          <span class="fbox fbold">No HTTP — zero CORS issues</span>
+        </div>
+      </div>
+    </div>
+    <div class="note">RAG context appended to system prompt. Toggleable per source. Radiopaedia covers GBM, stroke, MS, abscess, SDH, PRES, CVT, MELAS, FCD, and 42 other common diagnoses.</div>
+  </div>
+</div>
+
+<!-- ⑦ AI CALL -->
+<div class="stage c-ai">
+  <div class="connector"><div class="dot"></div><div class="line"></div></div>
+  <div class="card">
+    <div class="card-hdr"><span class="icon">🤖</span><span class="stage-name">7 — Claude API Call</span><span class="stage-num">VISION + TEXT</span></div>
+    <div class="flow">
+      <span class="fbox fyel">POST /v1/messages</span><span class="farr">→</span>
+      <span class="fbox fyel">system: scan protocol</span><span class="farr">+</span>
+      <span class="fbox fyel">user: [images…, text prompt]</span><span class="farr">→</span>
+      <span class="fbox fyel">max_tokens (user-set)</span>
+    </div>
+    <div class="note">API key from localStorage only (never hardcoded). Model selectable (claude-opus-4-5 default). anthropic-dangerous-direct-browser-access header for browser origin. Multi-series context includes anonymised patient ID, modality, series descriptions.</div>
+  </div>
+</div>
+
+<!-- ⑧ SCAN PROTOCOL -->
+<div class="stage c-scan">
+  <div class="connector"><div class="dot"></div><div class="line"></div></div>
+  <div class="card">
+    <div class="card-hdr"><span class="icon">🔍</span><span class="stage-name">8 — Mandatory Scan Protocol (System Prompt)</span><span class="stage-num">CHAIN-OF-THOUGHT</span></div>
+    <div class="anatomy-grid">
+      <span class="anat key">Step 1: Parenchyma survey</span>
+      <span class="anat">Frontal L/R</span>
+      <span class="anat">Parietal L/R</span>
+      <span class="anat">Temporal L/R + hippocampi</span>
+      <span class="anat">Occipital L/R</span>
+      <span class="anat">Insula L/R</span>
+      <span class="anat">Basal ganglia L/R</span>
+      <span class="anat">Thalami L/R</span>
+      <span class="anat">Internal capsule L/R</span>
+      <span class="anat">Corona radiata L/R</span>
+      <span class="anat">Corpus callosum</span>
+      <span class="anat">Brainstem</span>
+      <span class="anat">Cerebellum</span>
+      <span class="anat key">Step 2: Signal characterise</span>
+      <span class="anat">bright/dark vs surroundings</span>
+      <span class="anat">focal vs diffuse</span>
+      <span class="anat">DWI↑/↓ · ADC↑/↓ · FLAIR↑/↓</span>
+      <span class="anat">true restriction vs shine-through</span>
+      <span class="anat">L vs R pixel comparison</span>
+      <span class="anat key">Step 3: Extra-axial + vascular</span>
+      <span class="anat">Sulci / subarachnoid</span>
+      <span class="anat">Ventricular system</span>
+      <span class="anat">Dural sinuses</span>
+      <span class="anat key">Step 4: Conclusion (LAST)</span>
+      <span class="anat">TECHNIQUE</span>
+      <span class="anat">FINDINGS</span>
+      <span class="anat">IMPRESSION</span>
+      <span class="anat">URGENCY</span>
+    </div>
+    <div class="note" style="margin-top:8px"><b>Key rule</b>: conclusion written AFTER all regions scanned. Model cannot skip to impression first. Stroke dating matrix: DWI/ADC/FLAIR concordance table → hyperacute / acute / subacute / chronic.</div>
+  </div>
+</div>
+
+<!-- ⑨ OUTPUT -->
+<div class="stage c-out">
+  <div class="connector"><div class="dot"></div></div>
+  <div class="card">
+    <div class="card-hdr"><span class="icon">📄</span><span class="stage-name">9 — Structured Report Output</span><span class="stage-num">MULTI-FORMAT</span></div>
+    <div class="twin">
+      <div class="twin-box">
+        <h3 style="color:#56d364">Auto-fill (fillReportFromAI)</h3>
+        <div class="flow" style="flex-direction:column;align-items:flex-start;gap:3px">
+          <span class="fbox fgrn">Regex: TECHNIQUE / FINDINGS / IMPRESSION / URGENCY</span>
+          <span class="fbox fgrn">→ Structured report form fields</span>
+          <span class="fbox fgrn">Differential diagnosis ranking</span>
+        </div>
+      </div>
+      <div class="twin-box">
+        <h3 style="color:#56d364">Export formats</h3>
+        <div class="flow" style="flex-direction:column;align-items:flex-start;gap:3px">
+          <span class="fbox fgrn">Plain text (.txt)</span>
+          <span class="fbox fgrn">HL7 FHIR R4 DiagnosticReport (.json)</span>
+          <span class="fbox fgrn">PACS push (Orthanc / DICOMweb)</span>
+          <span class="fbox fgrn">Audit log → CSV (HIPAA trail)</span>
+        </div>
+      </div>
+    </div>
+    <div class="note"><b>Disclaimer</b>: FOR RESEARCH USE ONLY. Not CE marked. Not for clinical patient care decisions.</div>
+  </div>
+</div>
+
+</div><!-- /pipeline -->
+
+<div class="legend">
+  <div class="leg"><div class="leg-dot" style="border-color:#58a6ff"></div>Input</div>
+  <div class="leg"><div class="leg-dot" style="border-color:#d2a8ff"></div>Parse</div>
+  <div class="leg"><div class="leg-dot" style="border-color:#ffa657"></div>Anonymise</div>
+  <div class="leg"><div class="leg-dot" style="border-color:#7ee787"></div>Series/Viewer</div>
+  <div class="leg"><div class="leg-dot" style="border-color:#f78166"></div>Image Preprocess</div>
+  <div class="leg"><div class="leg-dot" style="border-color:#79c0ff"></div>RAG</div>
+  <div class="leg"><div class="leg-dot" style="border-color:#e3b341"></div>Claude API</div>
+  <div class="leg"><div class="leg-dot" style="border-color:#ff7b72"></div>Scan Protocol</div>
+  <div class="leg"><div class="leg-dot" style="border-color:#56d364"></div>Output</div>
+</div>
+
+<div style="text-align:center;margin-top:20px;font-size:11px;color:#484f58">
+  Generated by NeuroRadReporter · <a href="https://github.com/Radiology4U/NeuroRadReporter" style="color:#58a6ff">github.com/Radiology4U/NeuroRadReporter</a>
+</div>
+</body>
+</html>
