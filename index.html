@@ -2160,6 +2160,7 @@ X.B(E,Y);return E}return J}())
 
 /* ── STATE ── */
 let slices=[], curSlice=0, wc=40, ww=80, inv=false;
+let _loadSeq=0; // monotonic counter — unique ID per loaded slice
 let seriesGroups={}, curSeries=null; // series grouping for multi-sequence MRI
 let auditEvents=[];
 let apiKey='';
@@ -2432,8 +2433,11 @@ window.loadFiles=function(files){
   const prevCount=slices.length;
   let errs=0;
 
-  // Build de-duplication key set from already-loaded slices
-  const existing=new Set(slices.map(s=>(s.seriesUID||'_')+'|'+(s.instNum||s.inst||0)+'|'+(s.fname||'')));
+  // Build de-duplication key set from already-loaded slices.
+  // DICOM: keyed by seriesUID + instanceNumber (fname irrelevant — same file can have any name).
+  // Raster: keyed by loadId so same-named files dropped in different events are kept as separate slices.
+  function sliceKey(s){ return s.raster ? 'r|'+s.loadId : (s.seriesUID||'_')+'|'+(s.instNum||s.inst||0); }
+  const existing=new Set(slices.map(sliceKey));
 
   const arr=Array.from(files).slice(0,1000).sort((a,b)=>a.name.localeCompare(b.name));
 
@@ -2450,7 +2454,8 @@ window.loadFiles=function(files){
   let pending=arr.length;
 
   function onSlice(sl){
-    const key=(sl.seriesUID||'_')+'|'+(sl.instNum||sl.inst||0)+'|'+(sl.fname||'');
+    sl.loadId=++_loadSeq; // unique per slice, even if filename is identical to a previous one
+    const key=sliceKey(sl);
     if(!existing.has(key)){ existing.add(key); newSlices.push(sl); }
   }
 
