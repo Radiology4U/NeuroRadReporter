@@ -1,0 +1,10 @@
+{
+  "generated_at": "2026-11-01T00:00:00Z",
+  "count": 0,
+  "sources": {
+    "pubmed": 0,
+    "eurorad": 0
+  },
+  "note": "Initial seed file. Run the RAG update workflow (Actions → RAG Knowledge Update → Run workflow) to populate with PubMed + Eurorad cases.",
+  "cases": []
+}

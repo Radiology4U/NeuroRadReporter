@@ -2248,75 +2248,120 @@ window.testPubmed=async function(){
     else{st.style.color='var(--rd)';st.textContent='✗ Error '+r.status;}
   }catch(e){st.style.color='var(--rd)';st.textContent='✗ '+e.message;}
 };
-// Curated Radiopaedia cases indexed by diagnosis keyword
-const RADIOPAEDIA_CASES=[
-  /* 1 */ {keys:['glioblastoma','gbm','glioma','high grade'],title:'Glioblastoma (GBM)',url:'https://radiopaedia.org/cases/glioblastoma-87',dx:'High-grade astrocytic neoplasm with ring enhancement and central necrosis'},
-  /* 2 */ {keys:['low grade glioma','grade ii','oligodendroglioma'],title:'Low-grade glioma',url:'https://radiopaedia.org/cases/low-grade-glioma-1',dx:'Diffuse T2/FLAIR hyperintense infiltrative lesion without enhancement'},
-  /* 3 */ {keys:['meningioma'],title:'Meningioma',url:'https://radiopaedia.org/cases/meningioma-42',dx:'Extra-axial dural-based enhancing mass with dural tail'},
-  /* 4 */ {keys:['metastasis','metastases','brain mets'],title:'Brain metastases',url:'https://radiopaedia.org/cases/brain-metastases-ring-enhancing',dx:'Multiple ring-enhancing lesions at grey-white junction'},
-  /* 5 */ {keys:['stroke','infarct','ischaemia','ischemia','mca','dwi restriction'],title:'Acute ischaemic stroke',url:'https://radiopaedia.org/cases/acute-mca-territory-infarction-4',dx:'DWI restriction with ADC drop in arterial territory'},
-  /* 6 */ {keys:['haemorrhage','hemorrhage','bleed','hematoma'],title:'Intracerebral haemorrhage',url:'https://radiopaedia.org/cases/hypertensive-intracerebral-haemorrhage-1',dx:'Hyperdense parenchymal collection with surrounding oedema'},
-  /* 7 */ {keys:['subdural','sdh'],title:'Subdural haematoma',url:'https://radiopaedia.org/cases/subdural-haematoma-acute-6',dx:'Crescent-shaped extra-axial collection along inner table'},
-  /* 8 */ {keys:['epidural','extradural','edh'],title:'Epidural haematoma',url:'https://radiopaedia.org/cases/extradural-haematoma-5',dx:'Biconvex hyperdense extra-axial collection, does not cross sutures'},
-  /* 9 */ {keys:['multiple sclerosis','ms lesion','demyelination','dawson'],title:'Multiple sclerosis',url:'https://radiopaedia.org/cases/multiple-sclerosis-53',dx:'Periventricular and juxtacortical T2 hyperintense ovoid lesions'},
-  /* 10 */ {keys:['abscess','cerebral abscess','ring enhancing'],title:'Cerebral abscess',url:'https://radiopaedia.org/cases/cerebral-abscess-ring-enhancing-1',dx:'Ring-enhancing lesion with DWI restriction centrally (pus)'},
-  /* 11 */ {keys:['aneurysm','subarachnoid','sah'],title:'Subarachnoid haemorrhage / aneurysm',url:'https://radiopaedia.org/cases/subarachnoid-haemorrhage-3',dx:'Hyperdense CSF in basal cisterns, evaluate for aneurysm on CTA'},
-  /* 12 */ {keys:['avm','arteriovenous malformation'],title:'Arteriovenous malformation',url:'https://radiopaedia.org/cases/arteriovenous-malformation-brain-3',dx:'Tangle of vessels with flow voids, no normal intervening brain'},
-  /* 13 */ {keys:['cavernoma','cavernous malformation','cavernous hemangioma'],title:'Cavernous malformation',url:'https://radiopaedia.org/cases/cavernoma-1',dx:'Popcorn lesion with haemosiderin rim on T2*'},
-  /* 14 */ {keys:['hydrocephalus','ventricle enlargement','ventriculomegaly'],title:'Hydrocephalus',url:'https://radiopaedia.org/cases/hydrocephalus-communicating-3',dx:'Symmetric ventricular enlargement disproportionate to sulci'},
-  /* 15 */ {keys:['encephalitis','herpes','hsv'],title:'Viral encephalitis (HSV)',url:'https://radiopaedia.org/cases/herpes-simplex-encephalitis-11',dx:'T2/FLAIR signal in medial temporal lobes and cingulate gyrus'},
-  /* 16 */ {keys:['leukoencephalopathy','white matter','pml'],title:'Leukoencephalopathy / white matter disease',url:'https://radiopaedia.org/cases/progressive-multifocal-leukoencephalopathy-2',dx:'Asymmetric white matter T2 hyperintensity without mass effect'},
-  /* 17 */ {keys:['pituitary','sella','microadenoma','macroadenoma'],title:'Pituitary adenoma',url:'https://radiopaedia.org/cases/pituitary-macroadenoma-22',dx:'Sellar/suprasellar mass with upward convexity and stalk deviation'},
-  /* 18 */ {keys:['acoustic neuroma','vestibular schwannoma','cranial nerve'],title:'Vestibular schwannoma',url:'https://radiopaedia.org/cases/vestibular-schwannoma-15',dx:'CPA-IAC enhancing mass widening internal auditory canal'},
-  /* 19 */ {keys:['lymphoma','pcnsl','primary cns'],title:'Primary CNS lymphoma',url:'https://radiopaedia.org/cases/primary-cns-lymphoma-15',dx:'Periventricular homogeneously enhancing mass with restricted diffusion'},
-  /* 20 */ {keys:['normal','no abnormality','unremarkable'],title:'Normal brain MRI',url:'https://radiopaedia.org/cases/normal-brain-mri-3',dx:'No intracranial abnormality identified'},
-  /* 21 */ {keys:['pres','posterior reversible encephalopathy','hypertensive encephalopathy','eclampsia'],title:'PRES (Posterior Reversible Encephalopathy Syndrome)',url:'https://radiopaedia.org/cases/posterior-reversible-encephalopathy-syndrome-pres-21',dx:'Bilateral parieto-occipital T2/FLAIR hyperintensity from vasogenic oedema, often reversible'},
-  /* 22 */ {keys:['cerebral venous thrombosis','cvt','sinus thrombosis','cortical vein'],title:'Cerebral venous thrombosis',url:'https://radiopaedia.org/cases/cerebral-venous-thrombosis-2',dx:'Hyperdense dural sinus on CT, filling defect on contrast MRV, cortical haemorrhagic infarct'},
-  /* 23 */ {keys:['dural fistula','dural avf','dural arteriovenous fistula'],title:'Dural arteriovenous fistula',url:'https://radiopaedia.org/cases/dural-arteriovenous-fistula-3',dx:'Arterialised venous drainage on MRA; cortical vein engorgement; risk of haemorrhage'},
-  /* 24 */ {keys:['moyamoya','puff of smoke','steno-occlusive'],title:'Moyamoya disease',url:'https://radiopaedia.org/cases/moyamoya-disease-3',dx:'Progressive bilateral ICA/MCA stenosis with lenticulostriate collateral "puff of smoke"'},
-  /* 25 */ {keys:['watershed infarct','borderzone infarct','haemodynamic infarct'],title:'Watershed (borderzone) infarction',url:'https://radiopaedia.org/cases/watershed-infarcts-1',dx:'DWI restriction along internal or cortical borderzone territories from haemodynamic compromise'},
-  /* 26 */ {keys:['lacunar infarct','lacunar','small vessel','perforator'],title:'Lacunar infarct',url:'https://radiopaedia.org/cases/lacunar-infarcts-1',dx:'Small (<15 mm) deep DWI lesion in basal ganglia, thalamus, internal capsule or pons'},
-  /* 27 */ {keys:['basilar artery','basilar occlusion','basilar thrombosis','top of basilar'],title:'Basilar artery occlusion',url:'https://radiopaedia.org/cases/basilar-artery-thrombosis-2',dx:'Hyperdense basilar on CT; DWI brainstem/cerebellar/thalamic infarct; absent flow on MRA'},
-  /* 28 */ {keys:['adem','acute disseminated encephalomyelitis','post-infectious'],title:'ADEM (Acute Disseminated Encephalomyelitis)',url:'https://radiopaedia.org/cases/acute-disseminated-encephalomyelitis-adem-21',dx:'Multifocal T2 lesions in white matter and deep grey; often post-infectious; open-ring enhancement'},
-  /* 29 */ {keys:['sarcoidosis','neurosarcoidosis','leptomeningeal'],title:'Neurosarcoidosis',url:'https://radiopaedia.org/cases/neurosarcoidosis-3',dx:'Leptomeningeal and perivascular enhancement; cranial nerve involvement; hypothalamic lesions'},
-  /* 30 */ {keys:['vasculitis','cns vasculitis','primary angiitis'],title:'CNS vasculitis',url:'https://radiopaedia.org/cases/primary-angiitis-of-the-central-nervous-system-1',dx:'Multifocal DWI lesions at multiple ages; beading of vessels on MRA/DSA'},
-  /* 31 */ {keys:['wernicke','wernicke encephalopathy','thiamine','korsakoff'],title:'Wernicke encephalopathy',url:'https://radiopaedia.org/cases/wernicke-encephalopathy-13',dx:'Symmetric T2/FLAIR and DWI signal in mammillary bodies, periaqueductal grey, medial thalami'},
-  /* 32 */ {keys:['osmotic demyelination','central pontine myelinolysis','cpm','opm'],title:'Osmotic demyelination syndrome',url:'https://radiopaedia.org/cases/central-pontine-myelinolysis-2',dx:'T2 hyperintensity in central pons ("trident/bat wing"); may involve extrapontine structures'},
-  /* 33 */ {keys:['melas','mitochondrial','stroke-like episode','mitochondrial encephalopathy'],title:'MELAS / Mitochondrial encephalopathy',url:'https://radiopaedia.org/cases/melas-mitochondrial-encephalomyopathy-lactic-acidosis-and-stroke-like-episodes-1',dx:'Cortical T2/DWI lesions not following vascular territory; basal ganglia calcification; elevated lactate on MRS'},
-  /* 34 */ {keys:['cortical dysplasia','focal cortical dysplasia','fcd','transmantle'],title:'Focal cortical dysplasia',url:'https://radiopaedia.org/cases/focal-cortical-dysplasia-type-ii-1',dx:'Cortical thickening, blurring of grey-white junction, transmantle sign of T2 signal toward ventricle'},
-  /* 35 */ {keys:['tuberous sclerosis','tsc','tuber','subependymal nodule'],title:'Tuberous sclerosis complex',url:'https://radiopaedia.org/cases/tuberous-sclerosis-6',dx:'Cortical tubers, subependymal nodules, white matter radial migration lines; SEGA at foramen of Monro'},
-  /* 36 */ {keys:['neurofibromatosis','nf1','optic glioma','unidentified bright object'],title:'Neurofibromatosis type 1',url:'https://radiopaedia.org/cases/neurofibromatosis-type-1-18',dx:'T2 UBOs in basal ganglia/brainstem; optic pathway glioma; sphenoid wing dysplasia; plexiform neurofibromas'},
-  /* 37 */ {keys:['craniopharyngioma','rathke cleft','adamantinomatous'],title:'Craniopharyngioma',url:'https://radiopaedia.org/cases/craniopharyngioma-2',dx:'Suprasellar cystic ± solid mass with calcification (adamantinomatous) or purely cystic (papillary)'},
-  /* 38 */ {keys:['ependymoma','fourth ventricle','plastic ependymoma'],title:'Ependymoma',url:'https://radiopaedia.org/cases/ependymoma-of-the-fourth-ventricle-2',dx:'Fourth ventricle mass squeezing through foramina of Luschka/Magendie ("plastic" ependymoma in children)'},
-  /* 39 */ {keys:['medulloblastoma','desmoplastic','wnt','shh','posterior fossa pnet'],title:'Medulloblastoma',url:'https://radiopaedia.org/cases/medulloblastoma-19',dx:'Midline posterior fossa hyperdense enhancing mass in children; DWI restriction; CSF seeding'},
-  /* 40 */ {keys:['dnet','dysembryoplastic neuroepithelial','cortical tumour'],title:'DNET (Dysembryoplastic neuroepithelial tumour)',url:'https://radiopaedia.org/cases/dysembryoplastic-neuroepithelial-tumour-dnet-12',dx:'Cortical multinodular "bubbly" T2 lesion, no oedema, no enhancement; associated with epilepsy'},
-  /* 41 */ {keys:['ganglioglioma','gangliocytoma','temporal lobe tumour','low grade cortical'],title:'Ganglioglioma',url:'https://radiopaedia.org/cases/ganglioglioma-36',dx:'Mixed cystic-solid cortical tumour, often temporal; calcification common; variable enhancement'},
-  /* 42 */ {keys:['pineal','pineal tumour','germinoma','pineoblastoma','teratoma pineal'],title:'Pineal region tumour',url:'https://radiopaedia.org/cases/pineal-germinoma-3',dx:'Pineal mass with Parinaud syndrome; germinoma enhances avidly; pineoblastoma large and necrotic'},
-  /* 43 */ {keys:['choroid plexus','choroid plexus papilloma','choroid plexus carcinoma'],title:'Choroid plexus tumour',url:'https://radiopaedia.org/cases/choroid-plexus-papilloma-8',dx:'Intraventricular frond-like enhancing mass; papilloma in children; carcinoma shows invasion'},
-  /* 44 */ {keys:['colloid cyst','third ventricle cyst','foramen monro'],title:'Colloid cyst',url:'https://radiopaedia.org/cases/colloid-cyst-of-the-third-ventricle-15',dx:'Hyperdense round cyst at roof of third ventricle; obstructive hydrocephalus; can be life-threatening'},
-  /* 45 */ {keys:['dermoid','epidermoid','pearly tumour','ectodermal inclusion'],title:'Dermoid / Epidermoid cyst',url:'https://radiopaedia.org/cases/intracranial-epidermoid-cyst-6',dx:'Epidermoid: DWI restriction, follows CSF; Dermoid: fat density, may rupture causing chemical meningitis'},
-  /* 46 */ {keys:['chiari','chiari malformation','tonsillar herniation','syrinx'],title:'Chiari malformation',url:'https://radiopaedia.org/cases/chiari-i-malformation-31',dx:'Cerebellar tonsils >5 mm below foramen magnum; associated syringomyelia and basilar invagination'},
-  /* 47 */ {keys:['syringomyelia','syrinx','spinal cord cyst','hydromyelia'],title:'Syringomyelia',url:'https://radiopaedia.org/cases/syringomyelia-5',dx:'Centrally located intramedullary CSF-signal cavity; search for Chiari, tethering, or cord tumour'},
-  /* 48 */ {keys:['arachnoid cyst','extra-axial cyst','temporal fossa cyst'],title:'Arachnoid cyst',url:'https://radiopaedia.org/cases/arachnoid-cyst-of-the-middle-cranial-fossa-1',dx:'CSF-intensity extra-axial collection with no DWI restriction; most common in middle cranial fossa'},
-  /* 49 */ {keys:['subdural hygroma','chronic subdural','hygroma'],title:'Subdural hygroma',url:'https://radiopaedia.org/cases/subdural-hygroma-1',dx:'CSF-density bilateral subdural collections; often post-traumatic; distinguish from chronic SDH by density'},
-  /* 50 */ {keys:['contusion','cerebral contusion','coup','contrecoup','traumatic'],title:'Cerebral contusion',url:'https://radiopaedia.org/cases/cerebral-contusion-1',dx:'Haemorrhagic cortical injury at coup/contrecoup sites; blooming on T2*; may expand on follow-up CT'},
-];
+// ── RAG Knowledge Base (Dr. Gaillard) ────────────────────────────────────────
+// cases.json is built weekly by GitHub Actions (rag/scrapers → rag/cases.json).
+// Sources: PubMed Central OA (text mining permitted) + Eurorad (ESR open access).
+// Loaded once at startup; matched via TF-IDF cosine similarity client-side.
+// No server required — fully static / GitHub Pages compatible.
 
-function radiopaediaMatch(queryText){
-  const q=queryText.toLowerCase();
-  const scored=RADIOPAEDIA_CASES.map(c=>({
-    ...c,
-    score:c.keys.filter(k=>q.includes(k)).length
-  })).filter(c=>c.score>0).sort((a,b)=>b.score-a.score);
-  return scored.slice(0,3);
+let _ragCases = [];          // Array of case records from cases.json
+let _ragIdf   = null;        // Map<token, idf> — computed once after load
+let _ragLoaded = false;
+
+/** Tokenise text to lowercase unigrams, removing stopwords */
+function _ragTokens(text){
+  const STOP=new Set(['the','and','with','for','this','that','was','are','from','has',
+    'have','been','which','were','its','not','but','also','may','can','case','cases',
+    'report','patient','showed','showing','mri','ct','brain','cerebral']);
+  return (text||'').toLowerCase()
+    .replace(/[^a-z0-9 ]/g,' ')
+    .split(/\s+/)
+    .filter(t=>t.length>2 && !STOP.has(t));
 }
+
+/** Build IDF lookup from loaded cases. Call once after _ragCases is populated. */
+function _buildIdf(){
+  const N=_ragCases.length;
+  if(!N){_ragIdf=new Map();return;}
+  const df=new Map();
+  for(const c of _ragCases){
+    const terms=new Set(_ragTokens(c.abstract));
+    for(const t of terms) df.set(t,(df.get(t)||0)+1);
+  }
+  const idf=new Map();
+  for(const [t,d] of df) idf.set(t,Math.log((N+1)/(d+1))+1);
+  _ragIdf=idf;
+}
+
+/** TF-IDF vector for a text string (sparse Map<token, weight>) */
+function _tfidfVec(text){
+  const tokens=_ragTokens(text);
+  const tf=new Map();
+  for(const t of tokens) tf.set(t,(tf.get(t)||0)+1);
+  const vec=new Map();
+  for(const [t,count] of tf){
+    const idf=(_ragIdf&&_ragIdf.has(t))?_ragIdf.get(t):1;
+    vec.set(t,(count/tokens.length)*idf);
+  }
+  return vec;
+}
+
+/** Cosine similarity between two sparse TF-IDF vectors */
+function _cosineSim(a,b){
+  let dot=0,normA=0,normB=0;
+  for(const [t,w] of a){dot+=w*(b.get(t)||0);normA+=w*w;}
+  for(const [,w] of b) normB+=w*w;
+  if(!normA||!normB)return 0;
+  return dot/(Math.sqrt(normA)*Math.sqrt(normB));
+}
+
+/**
+ * Find top-k cases from the loaded knowledge base matching queryText.
+ * Returns array of case records with added .score property.
+ * Falls back to empty array if cases.json has not loaded yet.
+ */
+function ragMatch(queryText, k=3){
+  if(!_ragLoaded||!_ragCases.length)return[];
+  const qVec=_tfidfVec(queryText);
+  const scored=_ragCases.map(c=>{
+    // Cache each case's TF-IDF vector on the object itself (lazy)
+    if(!c._vec) c._vec=_tfidfVec(c.abstract);
+    return {...c, score:_cosineSim(qVec,c._vec)};
+  }).filter(c=>c.score>0.05);
+  scored.sort((a,b)=>b.score-a.score);
+  return scored.slice(0,k);
+}
+
+/** Load rag/cases.json at startup (non-blocking). */
+async function loadRagCases(){
+  const st=document.getElementById('rag-radio-status');
+  try{
+    const r=await fetch('rag/cases.json');
+    if(!r.ok){
+      if(st){st.style.color='var(--yw)';st.textContent='⚠ cases.json not found (first run? trigger workflow)';}
+      return;
+    }
+    const data=await r.json();
+    _ragCases=data.cases||[];
+    _buildIdf();
+    _ragLoaded=true;
+    const src=Object.entries(data.sources||{}).map(([s,n])=>s+':'+n).join(', ');
+    if(st){
+      st.style.color='var(--gn)';
+      st.textContent='✓ '+_ragCases.length+' cases loaded ('+src+') — generated '+
+        (data.generated_at||'').slice(0,10);
+    }
+    console.log('[RAG] Loaded',_ragCases.length,'cases from cases.json');
+  }catch(e){
+    console.warn('[RAG] cases.json load failed:',e.message);
+    if(st){st.style.color='var(--yw)';st.textContent='⚠ RAG offline — '+e.message;}
+  }
+}
+
+// Trigger load immediately (page already has DOMContentLoaded by the time this runs)
+loadRagCases();
 
 window.testRadiopaedia=function(){
   const st=document.getElementById('rag-radio-status');
-  const n=RADIOPAEDIA_CASES.length;
-  st.style.color='var(--gn)';
-  st.textContent='✓ Ready — '+n+' curated cases across '+n+' diagnoses';
-  toast('Radiopaedia library ready','ok');
+  if(_ragLoaded&&_ragCases.length){
+    st.style.color='var(--gn)';
+    st.textContent='✓ '+_ragCases.length+' cases ready (TF-IDF index built)';
+    toast('RAG knowledge base ready — '+_ragCases.length+' cases','ok');
+  }else{
+    st.style.color='var(--yw)';
+    st.textContent='⚠ Not loaded yet — check rag/cases.json exists';
+    toast('RAG cases.json not loaded','warn');
+  }
 };
 window.resetAll=function(){
   if(!confirm('Clear all saved data including API key?'))return;
@@ -3134,14 +3179,34 @@ window.sendChat=async function(){
     return `${multiPtPrefix}Study ID: ${anonPID(s0.patientName)}, modality ${s0.modality||'unknown'}, series "${s0.seriesDesc||''}", ${vs.length} images. Patient year of birth: ${anonDOB(s0.patientDOB)}. Study date: ${anonDate(s0.studyDate)}.`;
   })();
 
-  // RAG: fetch similar cases from enabled sources
+  // RAG: retrieve similar cases from the knowledge base (cases.json, loaded at startup)
+  // + optional live PubMed title lookup for recency.
   let ragContext='';
   const ragParts=[];
-  const ragWords=prompt.replace(/[^a-zA-Z0-9 ]/g,' ').split(' ').filter(w=>w.length>4).slice(0,5).join('+');
+  const ragQuery=prompt; // full prompt text → best TF-IDF signal
 
-  // PubMed
+  // Primary: TF-IDF match against cases.json (PubMed OA + Eurorad, updated weekly)
+  if(settings.ragRadiopaedia!==false){
+    const matches=ragMatch(ragQuery,3);
+    if(matches.length){
+      const sec=['## Similar Cases (Knowledge Base)'];
+      matches.forEach((c,i)=>{
+        const src=c.source==='pubmed'?'PubMed':'Eurorad';
+        const dx=c.diagnosis||c.findings||'';
+        const snippet=dx.length>180?dx.slice(0,180)+'…':dx;
+        sec.push((i+1)+'. ['+src+'] '+c.title+(c.year?' ('+c.year+')':'')+
+          (snippet?' — '+snippet:'')+
+          (c.url?' | '+c.url:''));
+      });
+      ragParts.push(sec.join('\n'));
+    }
+  }
+
+  // Secondary: live PubMed title lookup for very recent literature (optional)
   if(settings.ragPubmed!==false){
     try{
+      const ragWords=ragQuery.replace(/[^a-zA-Z0-9 ]/g,' ')
+        .split(' ').filter(w=>w.length>4).slice(0,5).join('+');
       const q=encodeURIComponent('neuroradiology+case+report+'+ragWords);
       const sr=await fetch('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term='+q+'[Title/Abstract]&retmax=3&retmode=json');
       if(sr.ok){
@@ -3151,25 +3216,13 @@ window.sendChat=async function(){
           const su=await fetch('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id='+ids.join(',')+'&retmode=json');
           if(su.ok){
             const suj=await su.json();const res=suj.result||{};
-            const sec=['## PubMed References'];
+            const sec=['## Recent PubMed Literature'];
             ids.forEach((id,i)=>{const e=res[id];if(!e)return;sec.push((i+1)+'. '+e.title+' ('+e.source+' '+e.pubdate+') https://pubmed.ncbi.nlm.nih.gov/'+id+'/');});
             if(sec.length>1)ragParts.push(sec.join('\n'));
           }
         }
       }
-    }catch(e){console.warn('PubMed RAG:',e.message);}
-  }
-
-  // Radiopaedia — curated cases matched by diagnosis keyword
-  if(settings.ragRadiopaedia!==false){
-    const matches=radiopaediaMatch(ragWords.replace(/\+/g,' ')+' '+prompt);
-    if(matches.length){
-      const sec=['## Radiopaedia Reference Cases'];
-      matches.forEach((c,i)=>{
-        sec.push((i+1)+'. '+c.title+' — '+c.dx+' | '+c.url);
-      });
-      ragParts.push(sec.join('\n'));
-    }
+    }catch(e){console.warn('PubMed live RAG:',e.message);}
   }
 
   if(ragParts.length)ragContext='## Related Literature\n'+ragParts.join('\n\n')+'\nConsider these references where clinically relevant.';

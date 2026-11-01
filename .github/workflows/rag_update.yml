@@ -1,77 +1,116 @@
 name: RAG Knowledge Update
 
+# Runs weekly (Sunday 01:37 UTC) and on manual trigger.
+# Crawls PubMed Central (BioC API — explicitly permitted) and Eurorad
+# (open access educational cases), then builds a flat cases.json served
+# by GitHub Pages. The static app fetches this file and does TF-IDF
+# matching client-side — no server required.
+
 on:
   schedule:
-    # Every Sunday at 02:00 UTC
-    - cron: '0 2 * * 0'
-  workflow_dispatch:  # allow manual trigger
+    - cron: '37 1 * * 0'   # Sunday 01:37 UTC (jittered off the hour)
+  workflow_dispatch:
+    inputs:
+      max_per_query:
+        description: 'Max results per search query'
+        default: '30'
+        required: false
 
 jobs:
-  update-knowledge-base:
+  update-rag:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
+    permissions:
+      contents: write   # needed to commit cases.json back to repo
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          lfs: false
+          fetch-depth: 1
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: rag/requirements-scraper.txt
 
-      - name: Install dependencies
+      - name: Install scraper dependencies
         run: |
-          pip install -r rag/requirements.txt
-
-      - name: Restore cached ChromaDB
-        uses: actions/cache@v4
-        with:
-          path: rag/data/chroma_db
-          key: chroma-db-${{ hashFiles('rag/data/*.jsonl') }}
-          restore-keys: |
-            chroma-db-
+          pip install --break-system-packages -q \
+            requests beautifulsoup4 lxml
 
       - name: Run PubMed scraper
         env:
           NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
         run: |
           python rag/scrapers/pubmed_scraper.py
+        # NCBI_API_KEY is optional — free at https://www.ncbi.nlm.nih.gov/account/
+        # Without it: 1 req/sec limit. With it: 10 req/sec.
 
-      - name: Run Radiopaedia scraper
+      - name: Run Eurorad scraper
         run: |
-          python rag/scrapers/radiopaedia_scraper.py
+          python rag/scrapers/eurorad_scraper.py
 
-      - name: Embed and index new cases
+      - name: Build static cases.json
         run: |
-          python rag/scripts/embed_and_index.py
+          python rag/scripts/build_static_rag.py
 
-      - name: Commit updated case data
+      - name: Show stats
         run: |
-          git config user.name "NeuroRad RAG Bot"
+          python -c "
+          import json
+          data = json.load(open('rag/cases.json'))
+          print(f\"cases.json: {data['count']} cases\")
+          for src, n in data['sources'].items():
+              print(f'  {src}: {n}')
+          print(f\"Generated: {data['generated_at']}\")
+          "
+
+      - name: Commit updated knowledge base
+        run: |
+          git config user.name  "NeuroRad RAG Bot"
           git config user.email "rag-bot@radiology4u.com"
-          git add rag/data/*.jsonl
-          git diff --cached --quiet || git commit -m "chore: weekly RAG knowledge update [skip ci]"
+          git add rag/cases.json rag/data/*.jsonl
+          git diff --cached --quiet || \
+            git commit -m "chore: weekly RAG update — $(date -u +%Y-%m-%d) [skip ci]"
           git push
 
-      - name: Upload ChromaDB artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: chroma-db
-          path: rag/data/chroma_db/
-          retention-days: 30
-
-  redeploy-fly:
-    needs: update-knowledge-base
+  # Optional: also rebuild ChromaDB vector index for self-hosters.
+  # Only runs if the chroma_db artifact exists (i.e. someone has set it up).
+  rebuild-chroma:
+    needs: update-rag
     runs-on: ubuntu-latest
-    if: ${{ secrets.FLY_API_TOKEN != '' }}
+    timeout-minutes: 60
+    if: ${{ vars.ENABLE_CHROMA == 'true' }}
+
     steps:
       - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Deploy updated data to Fly.io
-        run: fly deploy --config rag/deploy/fly.toml --remote-only
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install full dependencies
+        run: pip install -r rag/requirements.txt --break-system-packages -q
+
+      - name: Restore cached ChromaDB
+        uses: actions/cache@v4
+        with:
+          path: rag/data/chroma_db
+          key: chroma-${{ github.run_id }}
+          restore-keys: chroma-
+
+      - name: Rebuild vector index
+        run: python rag/scripts/embed_and_index.py
+
+      - name: Deploy to Fly.io
+        if: ${{ secrets.FLY_API_TOKEN != '' }}
+        uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: fly deploy --config rag/deploy/fly.toml --remote-only
+        if: ${{ secrets.FLY_API_TOKEN != '' }}
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
