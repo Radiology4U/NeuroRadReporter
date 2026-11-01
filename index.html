@@ -1739,9 +1739,12 @@ X.B(E,Y);return E}return J}())
                ondragleave="this.classList.remove('over')"
                ondrop="this.classList.remove('over');event.preventDefault();loadFiles(event.dataTransfer.files)">
             <div class="drop-icon">⬆</div>
-            <div class="drop-txt">Drop images here — DICOM (.dcm), PNG, JPEG or TIFF<br/>Multiple files supported · DICOM auto-grouped by Series UID · <a>browse files</a></div>
+            <div class="drop-txt" id="drop-txt">Drop images here — DICOM (.dcm), PNG, JPEG or TIFF<br/>Multiple files supported · DICOM auto-grouped by Series UID · <a>browse files</a></div>
           </div>
           <input id="file-input" type="file" accept=".dcm,application/dicom,.png,.jpg,.jpeg,.tif,.tiff,image/png,image/jpeg,image/tiff" multiple style="display:none" onchange="loadFiles(this.files)"/>
+          <div id="clear-btn-row" style="display:none;margin-top:6px;text-align:right">
+            <button class="btn" style="background:var(--er);font-size:12px;padding:4px 10px" onclick="clearAllSlices()">🗑 Clear all images</button>
+          </div>
 
           <div class="card">
             <div class="card-hdr">🏷️ Tags anonymized via SHA-256 (HIPAA §164.514 identifiers)</div>
@@ -2407,39 +2410,73 @@ function loadRasterFile(f, onDone, onErr){
   }
 }
 
+function clearAllSlices(){
+  slices=[]; curSlice=0; viewSlices=[]; seriesGroups={}; selectedSeriesKeys=new Set();
+  updateStats();
+  document.getElementById('st-err').textContent=0;
+  buildSeriesTable();
+  // Reset viewer to empty state
+  document.getElementById('viewer-empty').style.display='';
+  document.getElementById('main-canvas').style.display='none';
+  const fs=document.getElementById('filmstrip'); if(fs) fs.innerHTML='';
+  const sp=document.getElementById('series-selector'); if(sp) sp.innerHTML='';
+  // Reset drop zone text
+  document.getElementById('drop-txt').innerHTML='Drop images here — DICOM (.dcm), PNG, JPEG or TIFF<br/>Multiple files supported · DICOM auto-grouped by Series UID · <a>browse files</a>';
+  document.getElementById('clear-btn-row').style.display='none';
+  toast('All images cleared','ok');
+}
+
 window.loadFiles=function(files){
   if(!files||!files.length)return;
-  slices=[];curSlice=0;
-  let done=0,errs=0;
+  // ACCUMULATIVE: do NOT reset slices[] — add to existing
+  const prevCount=slices.length;
+  let errs=0;
+
+  // Build de-duplication key set from already-loaded slices
+  const existing=new Set(slices.map(s=>(s.seriesUID||'_')+'|'+(s.instNum||s.inst||0)+'|'+(s.fname||'')));
+
   const arr=Array.from(files).slice(0,1000).sort((a,b)=>a.name.localeCompare(b.name));
-  document.getElementById('st-total').textContent=arr.length;
 
   const rasterExts=new Set(['png','jpg','jpeg','tif','tiff','bmp','gif','webp','svg']);
   const rasterMimes=new Set(['image/png','image/jpeg','image/tiff','image/bmp','image/gif','image/webp','image/svg+xml']);
   function isDICOM(f){
     const ext=f.name.split('.').pop().toLowerCase();
-    // Explicit raster extension or raster MIME → not DICOM
     if(rasterExts.has(ext)||rasterMimes.has(f.type)) return false;
-    // Explicit DICOM extension or MIME → DICOM
     if(ext==='dcm'||f.type==='application/dicom') return true;
-    // Extensionless files or unknown extensions (IM-0001, 0001, etc.) → treat as DICOM
-    // regardless of f.type (browser may set 'application/octet-stream')
     return true;
   }
 
-  // We collect results asynchronously; raster files may fire multiple slices (multi-page TIFF)
+  const newSlices=[]; // buffer new slices from this drop before merging
   let pending=arr.length;
-  function onSlice(sl){ slices.push(sl); }
+
+  function onSlice(sl){
+    const key=(sl.seriesUID||'_')+'|'+(sl.instNum||sl.inst||0)+'|'+(sl.fname||'');
+    if(!existing.has(key)){ existing.add(key); newSlices.push(sl); }
+  }
+
   function finish(){
+    // Merge new slices into global array
+    slices.push(...newSlices);
     slices.sort((a,b)=>(a.seriesNum||0)-(b.seriesNum||0)||(a.instNum||a.inst||0)-(b.instNum||b.inst||0));
     updateStats();
     document.getElementById('st-err').textContent=errs;
     buildSeriesTable();
-    if(slices.length){initViewer();}
-    audit('ANON',`Loaded ${slices.length} images, ${errs} errors`);
-    if(errs>0&&slices.length===0) toast(`Failed to load ${errs} file(s) — check format`,'err');
-    else if(errs>0) toast(`Loaded ${slices.length} image(s) — ${errs} file(s) skipped`,'warn');
-    else toast(`Loaded ${slices.length} image(s) across ${new Set(slices.map(s=>s.seriesUID)).size} series`,'ok');
+    if(slices.length){ initViewerAdditive(prevCount===0); }
+
+    // Update drop zone hint to "Add more"
+    if(slices.length>0){
+      document.getElementById('drop-txt').innerHTML='➕ Drop more images to add to current study<br/>Or <a>browse files</a> to add more';
+      document.getElementById('clear-btn-row').style.display='block';
+    }
+
+    // Determine unique patients across all slices for anonymised audit
+    const uniquePIDs=[...new Set(slices.map(s=>anonPID(s.patientName||'')))];
+    audit('ANON',`Accumulated ${slices.length} total images (${newSlices.length} new), ${uniquePIDs.length} patient(s): ${uniquePIDs.join(', ')}, ${errs} errors`);
+
+    if(errs>0&&newSlices.length===0) toast(`Failed to load ${errs} file(s) — check format`,'err');
+    else if(errs>0) toast(`Added ${newSlices.length} image(s) — ${errs} skipped. Total: ${slices.length}`,'warn');
+    else if(newSlices.length===0) toast('No new images (already loaded or duplicates)','warn');
+    else toast(`Added ${newSlices.length} image(s) · Total: ${slices.length} across ${new Set(slices.map(s=>s.seriesUID)).size} series`,'ok');
   }
 
   arr.forEach(f=>{
@@ -2640,7 +2677,11 @@ let viewSlices=[];
 let selectedSeriesKeys=new Set(); // series checked for AI multi-series analysis
 
 function initViewer(){
-  // Group all slices by series
+  initViewerAdditive(true);
+}
+
+function initViewerAdditive(isFirstLoad){
+  // Rebuild seriesGroups from all accumulated slices
   seriesGroups={};
   slices.forEach(s=>{
     const k=s.seriesUID||'_';
@@ -2650,12 +2691,26 @@ function initViewer(){
   // Sort each series by instance number
   Object.values(seriesGroups).forEach(arr=>arr.sort((a,b)=>(a.instNum||0)-(b.instNum||0)));
 
-  // Pre-select all series for AI analysis
-  selectedSeriesKeys=new Set(Object.keys(seriesGroups));
-
-  // Pick first series for viewer
-  const firstKey=Object.keys(seriesGroups)[0];
-  loadSeries(firstKey);
+  if(isFirstLoad){
+    // First load: select all series
+    selectedSeriesKeys=new Set(Object.keys(seriesGroups));
+    // Load first series into viewer
+    const firstKey=Object.keys(seriesGroups)[0];
+    loadSeries(firstKey);
+  } else {
+    // Additive load: preserve existing selections, auto-select newly added series
+    const allKeys=new Set(Object.keys(seriesGroups));
+    allKeys.forEach(k=>{ if(!selectedSeriesKeys.has(k)) selectedSeriesKeys.add(k); });
+    // Remove any stale keys no longer present
+    [...selectedSeriesKeys].forEach(k=>{ if(!allKeys.has(k)) selectedSeriesKeys.delete(k); });
+    // Stay on current series if still valid, else pick first
+    if(!curSeries||!seriesGroups[curSeries]){
+      const firstKey=Object.keys(seriesGroups)[0];
+      loadSeries(firstKey);
+    } else {
+      buildSeriesSelector(); // just refresh chips/checkboxes
+    }
+  }
   buildSeriesSelector();
 }
 
@@ -2935,20 +2990,29 @@ window.sendChat=async function(){
   })();
 
   // Build context string describing all selected series
+  // Detect unique patients across all accumulated slices (anonymised)
+  const allPIDs=[...new Set(slices.map(s=>anonPID(s.patientName||'')))];
+  const multiPatient=allPIDs.length>1;
   const isRasterStudy=vs.length&&vs[0].raster;
   const ctx=(()=>{
     if(!vs.length) return 'No images loaded.';
-    if(isRasterStudy) return `Image study: ${vs.length} raster image(s). No DICOM metadata — analyse visual content only.`;
+    if(isRasterStudy){
+      const ptNote=multiPatient?` WARNING: Images from ${allPIDs.length} different patients are loaded (${allPIDs.join(', ')}). Reporting covers all.`:'';
+      return `Image study: ${vs.length} raster image(s). No DICOM metadata — analyse visual content only.${ptNote}`;
+    }
+    const multiPtPrefix=multiPatient
+      ? `⚠ Multi-patient study loaded: ${allPIDs.length} patients (${allPIDs.join(', ')}). `
+      : '';
     if(aiSeriesKeys.length>1){
       const seriesDesc=aiSeriesKeys.map(k=>{
         const s=(seriesGroups[k]||[])[0]||{};
         return `${s.modality||'?'} "${s.seriesDesc||k.slice(-6)}" (${(seriesGroups[k]||[]).length} sl.)`;
       }).join(' | ');
       const s0=vs[0];
-      return `Study ID: ${anonPID(s0.patientName)}. Multi-series analysis — ${aiSeriesKeys.length} series: ${seriesDesc}. Total images: ${vs.length}. Patient year of birth: ${anonDOB(s0.patientDOB)}. Study date: ${anonDate(s0.studyDate)}.`;
+      return `${multiPtPrefix}Study ID: ${anonPID(s0.patientName)}. Multi-series analysis — ${aiSeriesKeys.length} series: ${seriesDesc}. Total images: ${vs.length}. Patient year of birth: ${anonDOB(s0.patientDOB)}. Study date: ${anonDate(s0.studyDate)}.`;
     }
     const s0=vs[0];
-    return `Study ID: ${anonPID(s0.patientName)}, modality ${s0.modality||'unknown'}, series "${s0.seriesDesc||''}", ${vs.length} images. Patient year of birth: ${anonDOB(s0.patientDOB)}. Study date: ${anonDate(s0.studyDate)}.`;
+    return `${multiPtPrefix}Study ID: ${anonPID(s0.patientName)}, modality ${s0.modality||'unknown'}, series "${s0.seriesDesc||''}", ${vs.length} images. Patient year of birth: ${anonDOB(s0.patientDOB)}. Study date: ${anonDate(s0.studyDate)}.`;
   })();
 
   // RAG: fetch similar cases from enabled sources
