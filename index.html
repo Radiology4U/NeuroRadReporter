@@ -2823,25 +2823,118 @@ window.toggleSeriesAI=function(key, checked){
   if(selectedSeriesKeys.size===0) toast('Select at least one series for AI analysis','warn');
 };
 
-function autoWinSeries(e){
-  if(!e||!e.pixOff)return;
+// ── Percentile windowing ────────────────────────────────────────────────────
+// Builds a full histogram of all pixel HU/signal values then picks percentile
+// p_lo..p_hi as the display window. This is far more robust than min/max which
+// collapses with a single bright pixel (fat, artifact, CSF on DWI).
+function computeSliceHistogram(e){
+  if(!e||!e.pixOff) return null;
   const dv=new DataView(e.buf);
-  const b2=e.bitsAlloc===16;
-  const signed=e.pixelRep===1||e.isCT; // CT is always signed
-  let mn=Infinity,mx=-Infinity;
-  const n=Math.min(e.rows*e.cols,30000);
+  const b2=e.bitsAlloc===16||e.bitsStored>8;
+  const signed=e.pixelRep===1||e.isCT;
+  const n=e.rows*e.cols;
+  const vals=new Float32Array(n);
   for(let i=0;i<n;i++){
     let raw;
     if(b2){const o=e.pixOff+i*2;if(o+2>e.buf.byteLength)break;raw=signed?dv.getInt16(o,true):dv.getUint16(o,true);}
-    else{const o=e.pixOff+i;if(o>=e.buf.byteLength)break;raw=dv.getUint8(o);}
-    const hu=raw*e.rs+e.ri;
-    if(hu<mn)mn=hu;if(hu>mx)mx=hu;
+    else{const o=e.pixOff+i;if(o>=e.buf.byteLength)break;raw=signed?dv.getInt8(o):dv.getUint8(o);}
+    vals[i]=raw*e.rs+e.ri;
   }
-  if(isFinite(mn)&&isFinite(mx)&&mn<mx){
-    wc=Math.round((mn+mx)/2);
-    ww=Math.round(mx-mn)||256;
-  } else {
-    wc=128;ww=256; // fallback
+  return vals;
+}
+
+function percentilesFromVals(vals, pLo, pHi){
+  // Exclude background (near-zero air on MRI/CT) before computing window
+  // — zero-value background pixels dominate the histogram and crush the window
+  const tissue=[];
+  const threshold=vals.reduce((s,v)=>s+v,0)/vals.length * 0.05; // 5% of mean
+  for(let i=0;i<vals.length;i++){
+    const v=vals[i];
+    if(v>threshold) tissue.push(v);
+  }
+  if(tissue.length<100) return null; // not enough pixels
+  tissue.sort((a,b)=>a-b);
+  const lo=tissue[Math.floor(tissue.length*pLo/100)];
+  const hi=tissue[Math.floor(tissue.length*pHi/100)];
+  return {lo, hi, wc:(lo+hi)/2, ww:Math.max(hi-lo,1)};
+}
+
+function autoWinSeries(e){
+  if(!e||!e.pixOff)return;
+  const vals=computeSliceHistogram(e);
+  if(!vals){wc=128;ww=256;return;}
+  // Use p2–p98 for viewer (leaves headroom for extremes the user may want to see)
+  const p=percentilesFromVals(vals,2,98);
+  if(p){wc=Math.round(p.wc);ww=Math.round(p.ww);}
+  else{wc=128;ww=256;}
+}
+
+// ── Per-slice optimal window for AI rendering ───────────────────────────────
+// Returns {wc, ww} calibrated to the tissue-signal range of a single slice.
+// For MRI: p0.5–p99.5 to maximally capture subtle hyperintensities.
+// For CT:  stays at the viewer's current window (user has set it appropriately).
+function optimalWindowForSlice(e){
+  if(e.isCT||e.raster) return {wc, ww}; // keep viewer W/L for CT and raster
+  const vals=computeSliceHistogram(e);
+  if(!vals) return {wc, ww};
+  const p=percentilesFromVals(vals, 0.5, 99.5); // very tight — maximise tissue contrast
+  return p ? {wc:p.wc, ww:p.ww} : {wc, ww};
+}
+
+// ── CLAHE (Contrast Limited Adaptive Histogram Equalization) ────────────────
+// Applied to the final 8-bit greyscale cell after windowing.
+// Divides the image into tileX×tileY blocks, equalises each block's histogram,
+// clips at clipLimit to prevent over-amplifying noise, bilinearly interpolates.
+// This is the gold-standard radiological contrast enhancer used in clinical PACS.
+function applyCLAHE(data, width, height, tileX, tileY, clipLimit){
+  tileX=tileX||8; tileY=tileY||8; clipLimit=clipLimit||3.0;
+  const tW=Math.ceil(width/tileX), tH=Math.ceil(height/tileY);
+  // Build per-tile lookup tables
+  const luts=[];
+  for(let ty=0;ty<tileY;ty++){
+    luts[ty]=[];
+    for(let tx=0;tx<tileX;tx++){
+      const hist=new Int32Array(256);
+      // Gather pixels in this tile
+      const x0=tx*tW, y0=ty*tH;
+      const x1=Math.min(x0+tW,width), y1=Math.min(y0+tH,height);
+      let count=0;
+      for(let y=y0;y<y1;y++){
+        for(let x=x0;x<x1;x++){
+          hist[data[(y*width+x)*4]]++;
+          count++;
+        }
+      }
+      // Clip histogram
+      const clip=Math.max(1,Math.round(clipLimit*count/256));
+      let excess=0;
+      for(let i=0;i<256;i++){if(hist[i]>clip){excess+=hist[i]-clip;hist[i]=clip;}}
+      const redist=Math.floor(excess/256);
+      const rem=excess-redist*256;
+      for(let i=0;i<256;i++){hist[i]+=redist;}
+      for(let i=0;i<rem;i++){hist[i]++;}
+      // Build cumulative → LUT
+      const lut=new Uint8Array(256);
+      let cdf=0;
+      for(let i=0;i<256;i++){cdf+=hist[i];lut[i]=Math.round(cdf*255/count);}
+      luts[ty][tx]=lut;
+    }
+  }
+  // Bilinear interpolation of tile LUTs
+  for(let y=0;y<height;y++){
+    for(let x=0;x<width;x++){
+      const px=(y*width+x)*4;
+      const v=data[px];
+      // Tile coordinates (fractional)
+      const fx=(x+0.5)/tW-0.5, fy=(y+0.5)/tH-0.5;
+      const tx0=Math.max(0,Math.floor(fx)), tx1=Math.min(tileX-1,tx0+1);
+      const ty0=Math.max(0,Math.floor(fy)), ty1=Math.min(tileY-1,ty0+1);
+      const ax=fx-tx0, ay=fy-ty0;
+      const v00=luts[ty0][tx0][v], v10=luts[ty0][tx1][v];
+      const v01=luts[ty1][tx0][v], v11=luts[ty1][tx1][v];
+      const out=Math.round(v00*(1-ax)*(1-ay)+v10*ax*(1-ay)+v01*(1-ax)*ay+v11*ax*ay);
+      data[px]=out;data[px+1]=out;data[px+2]=out;
+    }
   }
 }
 
@@ -2861,12 +2954,27 @@ window.renderSlice=function(idx){
   document.getElementById('ov-br').textContent=`WC:${Math.round(wc)} WW:${Math.round(ww)}`;
 };
 
-function drawCanvas(e,cv){
+// drawCanvas: render slice to canvas.
+// opts.wcOvr/wwOvr override global wc/ww (used by AI tile pipeline).
+// opts.clahe=true applies CLAHE after windowing (AI tiles only).
+function drawCanvas(e,cv,opts){
   if(!e||!e.rows||!e.cols)return;
-  // Raster image (PNG/JPEG/TIFF) — draw directly; window/level ignored
+  opts=opts||{};
+  // Raster image (PNG/JPEG/TIFF) — draw directly; W/L ignored for viewer
   if(e.raster&&e.imgEl){
     cv.width=e.cols; cv.height=e.rows;
-    cv.getContext('2d').drawImage(e.imgEl,0,0,e.cols,e.rows);
+    const ctx=cv.getContext('2d');
+    ctx.drawImage(e.imgEl,0,0,e.cols,e.rows);
+    if(opts.clahe){
+      const id=ctx.getImageData(0,0,e.cols,e.rows);
+      // Convert to greyscale first
+      for(let i=0;i<id.data.length;i+=4){
+        const g=Math.round(id.data[i]*0.299+id.data[i+1]*0.587+id.data[i+2]*0.114);
+        id.data[i]=id.data[i+1]=id.data[i+2]=g;
+      }
+      applyCLAHE(id.data,e.cols,e.rows,8,8,2.5);
+      ctx.putImageData(id,0,0);
+    }
     return;
   }
   if(!e.pixOff)return;
@@ -2874,13 +2982,14 @@ function drawCanvas(e,cv){
   const ctx=cv.getContext('2d');
   const img=ctx.createImageData(e.cols,e.rows);
   const dv=new DataView(e.buf);
-  // CT is always signed 16-bit; MRI unsigned unless pixelRep=1
   const signed=e.pixelRep===1||e.isCT;
   const b2=e.bitsAlloc===16||e.bitsStored>8;
-  const _wc=isFinite(wc)?wc:128, _ww=isFinite(ww)&&ww>0?ww:256;
-  const lo=_wc-_ww/2,hi=_wc+_ww/2;
+  const _wc='wcOvr' in opts?opts.wcOvr:(isFinite(wc)?wc:128);
+  const _ww='wwOvr' in opts?opts.wwOvr:(isFinite(ww)&&ww>0?ww:256);
+  const lo=_wc-_ww/2, hi=_wc+_ww/2;
   const range=hi-lo||1;
   const n=e.rows*e.cols;
+  const _inv='inv' in opts?opts.inv:inv;
   for(let i=0;i<n;i++){
     let raw;
     if(b2){
@@ -2892,15 +3001,20 @@ function drawCanvas(e,cv){
       if(o>=e.buf.byteLength)break;
       raw=signed?dv.getInt8(o):dv.getUint8(o);
     }
-    // Apply rescale slope/intercept (HU for CT, signal for MRI)
     const hu=raw*e.rs+e.ri;
     let v=Math.round((hu-lo)/range*255);
     v=Math.max(0,Math.min(255,v));
-    if(inv)v=255-v;
+    if(_inv)v=255-v;
     const k=i*4;
     img.data[k]=v;img.data[k+1]=v;img.data[k+2]=v;img.data[k+3]=255;
   }
   ctx.putImageData(img,0,0);
+  // Apply CLAHE after windowing (AI tiles only — not the viewer, to keep standard display)
+  if(opts.clahe){
+    const id=ctx.getImageData(0,0,e.cols,e.rows);
+    applyCLAHE(id.data,e.cols,e.rows,8,8,2.5);
+    ctx.putImageData(id,0,0);
+  }
 }
 
 function buildFilmstrip(){
@@ -3055,30 +3169,58 @@ window.sendChat=async function(){
 
   if(ragParts.length)ragContext='## Related Literature\n'+ragParts.join('\n\n')+'\nConsider these references where clinically relevant.';
 
-  // ── Tiled vision: pack multiple slices into grid images to maximise coverage ──
-  // Grid: 4×4 cells at 192px each → 768×768px tile. Better resolution for subtle MRI signal.
-  // Lossless PNG for MRI to preserve DWI/FLAIR hyperintensities; JPEG only for large CT stacks.
+  // ── AI vision pipeline ──────────────────────────────────────────────────────
+  // Two-pass strategy:
+  //   Pass 1 — Survey tiles: 4×4 grid of 192px cells, each with CLAHE + per-slice
+  //             optimal percentile window. Covers all slices evenly (up to 640).
+  //   Pass 2 — Full-resolution crops: for DWI/MRI, send 4 full-size (512px cap)
+  //             slices at 1:1 resolution so subtle focal signal is not downsampled.
+  //             Slices picked = current + evenly spaced from middle third of stack.
+  // All MRI as lossless PNG; CT as JPEG 88%.
   let imageContent=[];
   const mainCv=document.getElementById('main-canvas');
   if(mainCv&&mainCv.width>0){
     try{
       const vs2=vs.length?vs:(viewSlices.length?viewSlices:slices);
       const total=vs2.length;
-      // How many slices to sample (user setting, default 200, max 640)
       const MAX_SLICES=Math.min(640,Math.max(1,parseInt(settings.visionSlices)||200));
-      // Grid geometry: 4×4 cells, each 192px — tile is 768×768
-      // 192px gives 50% more pixel detail than 128px for detecting subtle signal changes
-      const COLS=4, ROWS=4, CELL_PX=192;
-      const PER_TILE=COLS*ROWS; // 16
-      const MAX_TILES=40;       // 40×16 = 640 cap
-
-      // Determine if this is MRI (use lossless PNG) or CT (use JPEG to save tokens)
       const isMRI=vs2.some(s=>!s.isCT&&!s.raster);
-      const tileFormat=isMRI?'image/png':'image/jpeg';
-      const tileQuality=isMRI?undefined:0.88; // PNG is lossless; JPEG 88% for CT
       const tileMime=isMRI?'image/png':'image/jpeg';
 
-      // Evenly sample up to MAX_SLICES indices, always including current slice
+      // ── Helper: render one slice with per-slice optimal window + CLAHE ──
+      function renderCellOptimal(sl, cellPx){
+        const win=optimalWindowForSlice(sl);
+        const tmp=document.createElement('canvas');
+        drawCanvas(sl, tmp, {wcOvr:win.wc, wwOvr:win.ww, inv:false, clahe:true});
+        const cell=document.createElement('canvas');
+        cell.width=cellPx; cell.height=cellPx;
+        const cx=cell.getContext('2d');
+        cx.fillStyle='#000'; cx.fillRect(0,0,cellPx,cellPx);
+        const scale=Math.min(cellPx/tmp.width, cellPx/tmp.height);
+        const dw=Math.round(tmp.width*scale), dh=Math.round(tmp.height*scale);
+        cx.drawImage(tmp,(cellPx-dw)/2,(cellPx-dh)/2,dw,dh);
+        return cell;
+      }
+
+      // ── Helper: add label overlay to a cell canvas ──
+      function labelCell(cell, sliceIdx, sl, cellPx){
+        const cx=cell.getContext('2d');
+        cx.font='bold 13px monospace';
+        cx.fillStyle='rgba(0,0,0,0.65)'; cx.fillRect(1,1,38,16);
+        cx.fillStyle='#ff0'; cx.fillText('#'+(sliceIdx+1),3,14);
+        if(aiSeriesKeys.length>1){
+          const sDesc=(sl.seriesDesc||sl.modality||'').slice(0,8);
+          cx.font='bold 10px monospace';
+          cx.fillStyle='rgba(0,0,0,0.55)'; cx.fillRect(1,cellPx-17,sDesc.length*6+4,14);
+          cx.fillStyle='#0ff'; cx.fillText(sDesc,3,cellPx-5);
+        }
+        return cell;
+      }
+
+      // ── Pass 1: survey tiles (4×4, 192px cells) ──
+      const COLS=4, ROWS=4, CELL_PX=192;
+      const PER_TILE=COLS*ROWS; // 16
+      const MAX_TILES=38; // reserve 2 image slots for full-res crops
       let idxSet=new Set([curSlice]);
       const want=Math.min(MAX_SLICES, total, MAX_TILES*PER_TILE);
       if(total<=want){
@@ -3088,41 +3230,6 @@ window.sendChat=async function(){
       }
       const idxs=[...idxSet].sort((a,b)=>a-b);
 
-      // Helper: render one slice to CELL_PX×CELL_PX with contrast enhancement for MRI
-      function renderCell(sliceIdx){
-        const tmp=document.createElement('canvas');
-        // For MRI series: temporarily boost contrast to make subtle hyperintensities visible
-        const sl=vs2[sliceIdx];
-        const savedWC=wc, savedWW=ww;
-        if(isMRI&&!sl.raster){
-          // Narrow the window slightly to increase contrast for subtle signal differences
-          // but don't go too narrow — keep clinically useful range
-          ww=Math.max(ww*0.75, 50);
-        }
-        drawCanvas(sl, tmp);
-        wc=savedWC; ww=savedWW; // restore immediately
-
-        const cell=document.createElement('canvas');
-        cell.width=CELL_PX; cell.height=CELL_PX;
-        const cx=cell.getContext('2d');
-        cx.fillStyle='#000'; cx.fillRect(0,0,CELL_PX,CELL_PX);
-        const scale=Math.min(CELL_PX/tmp.width, CELL_PX/tmp.height);
-        const dw=Math.round(tmp.width*scale), dh=Math.round(tmp.height*scale);
-        cx.drawImage(tmp,(CELL_PX-dw)/2,(CELL_PX-dh)/2,dw,dh);
-        // Slice-number label — larger font for 192px cells
-        cx.font='bold 13px monospace';
-        cx.fillStyle='rgba(0,0,0,0.65)'; cx.fillRect(1,1,36,16);
-        cx.fillStyle='#ff0'; cx.fillText('#'+(sliceIdx+1),3,14);
-        // Series label if multi-series (bottom-left, cyan)
-        if(aiSeriesKeys.length>1){
-          const sDesc=(sl.seriesDesc||sl.modality||'').slice(0,8);
-          cx.font='bold 10px monospace';
-          cx.fillStyle='rgba(0,0,0,0.55)'; cx.fillRect(1,CELL_PX-17,sDesc.length*6+4,14);
-          cx.fillStyle='#0ff'; cx.fillText(sDesc,3,CELL_PX-5);
-        }
-        return cell;
-      }
-      // Build tiles
       for(let t=0;t<Math.ceil(idxs.length/PER_TILE);t++){
         const chunk=idxs.slice(t*PER_TILE,(t+1)*PER_TILE);
         const tile=document.createElement('canvas');
@@ -3131,15 +3238,47 @@ window.sendChat=async function(){
         tx.fillStyle='#111'; tx.fillRect(0,0,tile.width,tile.height);
         chunk.forEach((si,pos)=>{
           const col=pos%COLS, row=Math.floor(pos/COLS);
-          tx.drawImage(renderCell(si), col*CELL_PX, row*CELL_PX);
+          const cell=renderCellOptimal(vs2[si], CELL_PX);
+          labelCell(cell, si, vs2[si], CELL_PX);
+          tx.drawImage(cell, col*CELL_PX, row*CELL_PX);
         });
-        const dataUrl=tileQuality!==undefined
-          ? tile.toDataURL(tileFormat, tileQuality)
-          : tile.toDataURL(tileFormat);
+        const dataUrl=isMRI ? tile.toDataURL('image/png') : tile.toDataURL('image/jpeg',0.88);
         const b64=dataUrl.split(',')[1];
         if(b64) imageContent.push({type:'image',source:{type:'base64',media_type:tileMime,data:b64}});
       }
-      console.log(`Vision (${isMRI?'MRI-PNG':'CT-JPEG'}): ${idxs.length}/${total} slices → ${imageContent.length} tile(s) sent`);
+
+      // ── Pass 2: full-resolution key slices (MRI only) ──
+      // Each sent at native resolution capped at 512px (1 image per slice)
+      // so that a small DWI or FLAIR lesion is visible at 1:1 pixel.
+      if(isMRI && total>0 && imageContent.length<40){
+        const FULLRES_PX=512;
+        // Pick up to 4 key slices: current slice + 3 evenly from middle 50% of stack
+        const mid0=Math.floor(total*0.25), mid1=Math.floor(total*0.75);
+        const keyIdxs=new Set([curSlice]);
+        for(let i=0;i<3;i++) keyIdxs.add(Math.round(mid0+(mid1-mid0)*i/2));
+        [...keyIdxs].sort((a,b)=>a-b).slice(0,4).forEach(si=>{
+          const sl=vs2[Math.min(si,total-1)];
+          const win=optimalWindowForSlice(sl);
+          const tmp=document.createElement('canvas');
+          drawCanvas(sl, tmp, {wcOvr:win.wc, wwOvr:win.ww, inv:false, clahe:true});
+          // Scale to FULLRES_PX keeping aspect
+          const scale=Math.min(FULLRES_PX/tmp.width, FULLRES_PX/tmp.height, 1);
+          const fw=Math.round(tmp.width*scale), fh=Math.round(tmp.height*scale);
+          const full=document.createElement('canvas');
+          full.width=fw; full.height=fh;
+          const fc=full.getContext('2d');
+          fc.fillStyle='#000'; fc.fillRect(0,0,fw,fh);
+          fc.drawImage(tmp,0,0,fw,fh);
+          // Label: slice number + "FULL RES" tag
+          fc.font='bold 14px monospace';
+          fc.fillStyle='rgba(0,0,0,0.7)'; fc.fillRect(1,1,95,18);
+          fc.fillStyle='#ff0'; fc.fillText(`#${si+1} FULL-RES`,3,15);
+          const b64=full.toDataURL('image/png').split(',')[1];
+          if(b64) imageContent.push({type:'image',source:{type:'base64',media_type:'image/png',data:b64}});
+        });
+      }
+
+      console.log(`Vision pipeline (${isMRI?'MRI-PNG':'CT-JPEG'}): ${idxs.length}/${total} survey slices + ${isMRI?'4':'0'} full-res → ${imageContent.length} image(s) sent to Claude`);
     }catch(imgErr){console.warn('Image capture:',imgErr);}
   }
 
@@ -3151,7 +3290,11 @@ window.sendChat=async function(){
         model:settings.model,max_tokens:settings.tokens,
         system:`You are a board-certified neuroradiologist AI with expertise in advanced MRI signal analysis. ${ctx}
 
-IMAGE FORMAT: The DICOM series arrive as tiled contact sheets — each image is a 4×4 grid of slices (16 cells per tile), each cell ${vs.length} slices total across ${imageContent.length} tile(s). Yellow label top-left = slice number. ${aiSeriesKeys.length>1?'Cyan label bottom-left = series name.':''}
+IMAGE FORMAT: Two-pass pipeline — ${imageContent.length} image(s) total.
+• SURVEY TILES (first images): 4×4 contact sheets, 192px/cell, covering ${vs.length} slices. Yellow label top-left = slice number.${aiSeriesKeys.length>1?' Cyan label bottom-left = series name.':''}
+• FULL-RESOLUTION images (last up to 4, labelled "FULL-RES"): key slices at native resolution (≤512px), lossless PNG, CLAHE-enhanced. Use these to confirm subtle findings seen in the survey tiles.
+• ALL images preprocessed with per-slice percentile windowing (p0.5–p99.5 tissue range) and CLAHE — the contrast is optimised for detecting hyperintensities.
+
 
 CRITICAL SIGNAL INTERPRETATION RULES — apply these before forming any conclusion:
 
