@@ -3056,20 +3056,28 @@ window.sendChat=async function(){
   if(ragParts.length)ragContext='## Related Literature\n'+ragParts.join('\n\n')+'\nConsider these references where clinically relevant.';
 
   // ── Tiled vision: pack multiple slices into grid images to maximise coverage ──
-  // Each tile is a COLS×ROWS grid of CELL_PX thumbnails with slice-number labels.
-  // 40 tiles × 25 slices/tile = 1000 slices per API call (Claude allows 100 images).
+  // Grid: 4×4 cells at 192px each → 768×768px tile. Better resolution for subtle MRI signal.
+  // Lossless PNG for MRI to preserve DWI/FLAIR hyperintensities; JPEG only for large CT stacks.
   let imageContent=[];
   const mainCv=document.getElementById('main-canvas');
   if(mainCv&&mainCv.width>0){
     try{
       const vs2=vs.length?vs:(viewSlices.length?viewSlices:slices);
       const total=vs2.length;
-      // How many slices to sample (user setting, default 200, max 1000)
-      const MAX_SLICES=Math.min(1000,Math.max(1,parseInt(settings.visionSlices)||200));
-      // Grid geometry: 5×5 cells per tile, each cell 128 px square
-      const COLS=5, ROWS=5, CELL_PX=128;
-      const PER_TILE=COLS*ROWS; // 25
-      const MAX_TILES=40;       // 40×25 = 1000 cap
+      // How many slices to sample (user setting, default 200, max 640)
+      const MAX_SLICES=Math.min(640,Math.max(1,parseInt(settings.visionSlices)||200));
+      // Grid geometry: 4×4 cells, each 192px — tile is 768×768
+      // 192px gives 50% more pixel detail than 128px for detecting subtle signal changes
+      const COLS=4, ROWS=4, CELL_PX=192;
+      const PER_TILE=COLS*ROWS; // 16
+      const MAX_TILES=40;       // 40×16 = 640 cap
+
+      // Determine if this is MRI (use lossless PNG) or CT (use JPEG to save tokens)
+      const isMRI=vs2.some(s=>!s.isCT&&!s.raster);
+      const tileFormat=isMRI?'image/png':'image/jpeg';
+      const tileQuality=isMRI?undefined:0.88; // PNG is lossless; JPEG 88% for CT
+      const tileMime=isMRI?'image/png':'image/jpeg';
+
       // Evenly sample up to MAX_SLICES indices, always including current slice
       let idxSet=new Set([curSlice]);
       const want=Math.min(MAX_SLICES, total, MAX_TILES*PER_TILE);
@@ -3079,22 +3087,39 @@ window.sendChat=async function(){
         for(let i=0;i<want;i++) idxSet.add(Math.round(i*(total-1)/(want-1)));
       }
       const idxs=[...idxSet].sort((a,b)=>a-b);
-      // Helper: render one DICOM slice to a CELL_PX×CELL_PX canvas
+
+      // Helper: render one slice to CELL_PX×CELL_PX with contrast enhancement for MRI
       function renderCell(sliceIdx){
         const tmp=document.createElement('canvas');
-        drawCanvas(vs2[sliceIdx],tmp);
+        // For MRI series: temporarily boost contrast to make subtle hyperintensities visible
+        const sl=vs2[sliceIdx];
+        const savedWC=wc, savedWW=ww;
+        if(isMRI&&!sl.raster){
+          // Narrow the window slightly to increase contrast for subtle signal differences
+          // but don't go too narrow — keep clinically useful range
+          ww=Math.max(ww*0.75, 50);
+        }
+        drawCanvas(sl, tmp);
+        wc=savedWC; ww=savedWW; // restore immediately
+
         const cell=document.createElement('canvas');
         cell.width=CELL_PX; cell.height=CELL_PX;
         const cx=cell.getContext('2d');
-        // Fill black, then fit image (letterbox)
         cx.fillStyle='#000'; cx.fillRect(0,0,CELL_PX,CELL_PX);
         const scale=Math.min(CELL_PX/tmp.width, CELL_PX/tmp.height);
         const dw=Math.round(tmp.width*scale), dh=Math.round(tmp.height*scale);
         cx.drawImage(tmp,(CELL_PX-dw)/2,(CELL_PX-dh)/2,dw,dh);
-        // Slice-number label (top-left, small)
-        cx.font='bold 11px monospace';
-        cx.fillStyle='rgba(0,0,0,0.6)'; cx.fillRect(1,1,32,14);
-        cx.fillStyle='#ff0'; cx.fillText('#'+(sliceIdx+1),3,12);
+        // Slice-number label — larger font for 192px cells
+        cx.font='bold 13px monospace';
+        cx.fillStyle='rgba(0,0,0,0.65)'; cx.fillRect(1,1,36,16);
+        cx.fillStyle='#ff0'; cx.fillText('#'+(sliceIdx+1),3,14);
+        // Series label if multi-series (bottom-left, cyan)
+        if(aiSeriesKeys.length>1){
+          const sDesc=(sl.seriesDesc||sl.modality||'').slice(0,8);
+          cx.font='bold 10px monospace';
+          cx.fillStyle='rgba(0,0,0,0.55)'; cx.fillRect(1,CELL_PX-17,sDesc.length*6+4,14);
+          cx.fillStyle='#0ff'; cx.fillText(sDesc,3,CELL_PX-5);
+        }
         return cell;
       }
       // Build tiles
@@ -3108,10 +3133,13 @@ window.sendChat=async function(){
           const col=pos%COLS, row=Math.floor(pos/COLS);
           tx.drawImage(renderCell(si), col*CELL_PX, row*CELL_PX);
         });
-        const b64=tile.toDataURL('image/jpeg',0.80).split(',')[1];
-        if(b64) imageContent.push({type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}});
+        const dataUrl=tileQuality!==undefined
+          ? tile.toDataURL(tileFormat, tileQuality)
+          : tile.toDataURL(tileFormat);
+        const b64=dataUrl.split(',')[1];
+        if(b64) imageContent.push({type:'image',source:{type:'base64',media_type:tileMime,data:b64}});
       }
-      console.log('Vision: '+idxs.length+' of '+total+' slices → '+imageContent.length+' tile(s) sent to Claude');
+      console.log(`Vision (${isMRI?'MRI-PNG':'CT-JPEG'}): ${idxs.length}/${total} slices → ${imageContent.length} tile(s) sent`);
     }catch(imgErr){console.warn('Image capture:',imgErr);}
   }
 
@@ -3121,7 +3149,44 @@ window.sendChat=async function(){
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({
         model:settings.model,max_tokens:settings.tokens,
-        system:`You are a board-certified neuroradiologist AI. ${ctx} You are receiving the DICOM series as tiled contact sheets — each image is a 5×5 grid of slices labelled #1, #2 … in yellow. Slices from multiple series are interleaved (round-robin) so adjacent cells may come from different sequences. There are ${imageContent.length} tile image(s) covering ${vs.length} slices total.${aiSeriesKeys.length>1?` MULTI-SERIES ANALYSIS: correlate findings ACROSS all ${aiSeriesKeys.length} series. For stroke dating: DWI restriction + ADC dark = acute (<24h); DWI bright + ADC normal = T2 shine-through; FLAIR bright = >4–6h. Note any DWI/ADC/FLAIR mismatch.`:''} Carefully inspect EVERY cell in EVERY tile — reference slices by their yellow label number. Describe ALL visible abnormalities with their slice number(s). Do NOT assume normal findings. Reply in ${settings.lang}. Be concise and clinically precise.`+(ragContext?'\n\n'+ragContext:''),
+        system:`You are a board-certified neuroradiologist AI with expertise in advanced MRI signal analysis. ${ctx}
+
+IMAGE FORMAT: The DICOM series arrive as tiled contact sheets — each image is a 4×4 grid of slices (16 cells per tile), each cell ${vs.length} slices total across ${imageContent.length} tile(s). Yellow label top-left = slice number. ${aiSeriesKeys.length>1?'Cyan label bottom-left = series name.':''}
+
+CRITICAL SIGNAL INTERPRETATION RULES — apply these before forming any conclusion:
+
+DWI (Diffusion-Weighted Imaging):
+• Acute ischaemia appears as FOCAL BRIGHT signal (white/near-white) on DWI — even subtle, hazy or faint brightness in a gyral or deep grey pattern is SIGNIFICANT
+• Compare each region to the CONTRALATERAL mirror hemisphere — asymmetric brightness is the key finding
+• DWI bright signal can appear in ANY territory including brainstem, cerebellum, thalami, cortex
+• Do NOT dismiss mild brightness — early infarcts may appear only faintly bright on DWI
+
+ADC (Apparent Diffusion Coefficient):
+• Acute ischaemia = DARK on ADC (restricted diffusion)
+• T2 shine-through = bright on both DWI and ADC (not true restriction)
+• ALWAYS report DWI/ADC concordance: true restriction = DWI↑ + ADC↓
+
+FLAIR (Fluid-Attenuated Inversion Recovery):
+• FLAIR hyperintensity = bright white signal in a normally grey background
+• Periventricular, juxtacortical, subcortical or cortical distribution — any focal brightness is pathological
+• Subtle FLAIR cortical ribboning = acute cortical infarct or encephalitis
+• FLAIR vessels bright = slow flow / vessel occlusion (FLAIR vascular hyperintensity sign)
+• Subarachnoid blood appears as FLAIR bright in sulci
+• A normal brain should be uniformly grey except CSF (black), fat and mucosa (white)
+
+GENERAL RULES:
+• ALWAYS report the PRESENCE of signal abnormalities — do not defer to "clinical correlation"
+• Specifically compare LEFT vs RIGHT hemisphere in every region
+• Report absolute slice numbers (yellow labels) where findings appear
+• For multi-series: correlate FLAIR, DWI and ADC together — state DWI/FLAIR/ADC status for each lesion
+${aiSeriesKeys.length>1?`\nMULTI-SERIES STROKE DATING PROTOCOL:
+• DWI bright + ADC dark + FLAIR normal → hyperacute stroke (<4–6 h)
+• DWI bright + ADC dark + FLAIR bright → acute/early subacute stroke (>4–6 h, <7 days)
+• DWI fading + ADC dark + FLAIR bright → subacute stroke (days–weeks)
+• DWI fading + ADC pseudonormalising + FLAIR bright → subacute/chronic
+• Describe MISMATCH explicitly if any series disagrees
+`:''}
+Reply in ${settings.lang}. Be specific about slice numbers and hemisphere. Always state whether signal abnormalities are PRESENT or ABSENT — never leave signal assessment blank.`+(ragContext?'\n\n'+ragContext:''),
         messages:[{role:'user',content:[...imageContent,{type:'text',text:prompt}]}]
       })
     });
