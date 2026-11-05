@@ -95,23 +95,42 @@ body{background:var(--bg);color:var(--tx);font-family:var(--font);font-size:13px
 .sb-logo{display:flex;align-items:center;gap:10px;}
 .sb-sub{font-size:9.5px;color:rgba(255,255,255,0.3);letter-spacing:.6px;margin-top:3px;font-weight:400}
 .sb-section{
-  padding:16px 16px 4px;
-  font-size:10px;font-weight:600;
-  color:rgba(255,255,255,0.35);
-  letter-spacing:.8px;
+  padding:18px 16px 6px;
+  font-size:10px;font-weight:700;
+  color:rgba(255,255,255,0.45);
+  letter-spacing:1.2px;
   background:transparent;
+  text-shadow:0 1px 3px rgba(0,0,0,0.6);
 }
 .sb-item{
   display:flex;align-items:center;gap:9px;
-  padding:8px 12px;border-radius:6px;margin:1px 6px;
+  padding:9px 13px;border-radius:8px;margin:2px 8px;
   cursor:pointer;font-size:13px;
-  transition:background .12s,color .12s;position:relative;
-  border:none;background:transparent;text-align:left;width:calc(100% - 12px);
-  font-family:var(--font);font-weight:500;color:rgba(255,255,255,0.72);
+  transition:all .18s cubic-bezier(.4,0,.2,1);position:relative;
+  border:none;text-align:left;width:calc(100% - 16px);
+  font-family:var(--font);font-weight:500;color:rgba(255,255,255,0.88);
   letter-spacing:0;
+  background:rgba(10,12,20,0.55);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,0.07);
+  box-shadow:0 2px 8px rgba(0,0,0,0.35),inset 0 1px 0 rgba(255,255,255,0.08);
 }
-.sb-item:hover{background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.95)}
-.sb-item.active{background:rgba(37,99,235,0.3);color:#fff;font-weight:600;border-left:2px solid #3B82F6;padding-left:10px}
+.sb-item:hover{
+  background:rgba(20,25,45,0.72);
+  color:#fff;
+  border-color:rgba(255,255,255,0.14);
+  box-shadow:0 4px 16px rgba(0,0,0,0.45),inset 0 1px 0 rgba(255,255,255,0.12);
+  transform:translateY(-1px);
+}
+.sb-item.active{
+  background:linear-gradient(135deg,rgba(37,99,235,0.55) 0%,rgba(29,78,216,0.45) 100%);
+  color:#fff;font-weight:600;
+  border:1px solid rgba(59,130,246,0.5);
+  border-left:3px solid #60A5FA;
+  padding-left:10px;
+  box-shadow:0 4px 16px rgba(37,99,235,0.4),inset 0 1px 0 rgba(255,255,255,0.15),0 0 0 1px rgba(59,130,246,0.2);
+  transform:translateY(-1px);
+}
 .sb-item .icon{width:17px;text-align:center;flex-shrink:0;font-size:14px;opacity:1}
 .sb-badge{
   margin-left:auto;min-width:18px;height:18px;
