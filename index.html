@@ -3327,11 +3327,63 @@ window.sendChat=async function(){
       const isMRI=vs2.some(s=>!s.isCT&&!s.raster);
       const tileMime=isMRI?'image/png':'image/jpeg';
 
-      // ── Helper: render one slice with per-slice optimal window + CLAHE ──
+      // ── Helper: classify series modality from SeriesDescription / ImageType ──
+      function seriesModalityOf(sl){
+        const desc=((sl.seriesDesc||'')+(sl.imageType||'')).toUpperCase();
+        if(/\bDWI\b|DIFFUSION|B1000|B[0-9]{3,4}|EPI.*TRACE|TRACE/i.test(desc)) return 'DWI';
+        if(/\bADC\b|APPARENT.DIFF/i.test(desc)) return 'ADC';
+        if(/\bFLAIR\b|FLUID.ATT/i.test(desc)) return 'FLAIR';
+        if(/\bT2\b|TSE|FSE|HASTE/i.test(desc)) return 'T2';
+        if(/\bT1\b|MPRAGE|BRAVO|SPGR|TFE/i.test(desc)) return 'T1';
+        if(/\bSWI\b|SUSCEPT|GRE|SWAN|STAR/i.test(desc)) return 'SWI';
+        if(/\bMRA\b|TOF|ANGIO/i.test(desc)) return 'MRA';
+        return sl.modality||'MRI';
+      }
+
+      // ── Helper: modality-specific optimal windowing ──
+      // DWI: narrow high-percentile window to maximise focal hyperintensity visibility
+      // ADC: invert + standard window (restriction appears bright = white)
+      // FLAIR: wide window, suppress CSF black
+      function windowForModality(sl, modality){
+        const vals=computeSliceHistogram(sl);
+        if(!vals) return {wc, ww, inv:false};
+        const def=percentilesFromVals(vals, 0.5, 99.5)||{wc, ww};
+        if(modality==='DWI'){
+          // Narrow window biased toward upper intensities — makes tiny bright foci stand out
+          const hi=percentilesFromVals(vals, 50, 99.8)||def;
+          return {wc:hi.wc, ww:hi.ww*0.7, inv:false};
+        }
+        if(modality==='ADC'){
+          // Invert: low ADC (true restriction) = dark on ADC → bright after inversion
+          return {wc:def.wc, ww:def.ww, inv:true};
+        }
+        if(modality==='FLAIR'){
+          // Wider range to show white matter vs grey matter contrast
+          const wide=percentilesFromVals(vals, 1, 99)||def;
+          return {wc:wide.wc, ww:wide.ww, inv:false};
+        }
+        return {wc:def.wc, ww:def.ww, inv:false};
+      }
+
+      // ── Helper: find hottest slice index in a series (highest 99th-pct brightness) ──
+      // This reliably finds the DWI hyperintensity slice rather than guessing middle.
+      function hottestSliceIdx(pool){
+        let bestIdx=0, bestVal=-Infinity;
+        pool.forEach((sl,i)=>{
+          const vals=computeSliceHistogram(sl);
+          if(!vals) return;
+          const p=percentilesFromVals(vals, 99, 99.9);
+          if(p && p.wc > bestVal){ bestVal=p.wc; bestIdx=i; }
+        });
+        return bestIdx;
+      }
+
+      // ── Helper: render one slice with modality-aware window + CLAHE ──
       function renderCellOptimal(sl, cellPx){
-        const win=optimalWindowForSlice(sl);
+        const mod=seriesModalityOf(sl);
+        const win=windowForModality(sl, mod);
         const tmp=document.createElement('canvas');
-        drawCanvas(sl, tmp, {wcOvr:win.wc, wwOvr:win.ww, inv:false, clahe:true});
+        drawCanvas(sl, tmp, {wcOvr:win.wc, wwOvr:win.ww, inv:win.inv, clahe:true});
         const cell=document.createElement('canvas');
         cell.width=cellPx; cell.height=cellPx;
         const cx=cell.getContext('2d');
@@ -3387,21 +3439,25 @@ window.sendChat=async function(){
         if(b64) imageContent.push({type:'image',source:{type:'base64',media_type:tileMime,data:b64}});
       }
 
-      // ── Pass 2: full-resolution key slices (MRI only) ──
-      // Each sent at native resolution capped at 512px (1 image per slice)
-      // so that a small DWI or FLAIR lesion is visible at 1:1 pixel.
+      // ── Pass 2: modality-aware full-resolution key slices (MRI only) ──
+      // Strategy:
+      //   • For each DWI series: find the HOTTEST slice (highest 99th-pct pixel =
+      //     most likely hyperintensity), render with DWI-narrow window at 512px.
+      //   • For each ADC series: find the slice at the SAME STACK POSITION as the
+      //     hottest DWI slice, render inverted (restriction = white) at 512px.
+      //   • For FLAIR: same position, standard window at 512px.
+      //   • If no DWI series: fall back to current + evenly spaced key slices.
+      // This ensures the radiologically critical DWI lesion slice is always sent
+      // at full resolution regardless of stack depth.
       if(isMRI && total>0 && imageContent.length<40){
         const FULLRES_PX=512;
-        // Pick up to 4 key slices: current slice + 3 evenly from middle 50% of stack
-        const mid0=Math.floor(total*0.25), mid1=Math.floor(total*0.75);
-        const keyIdxs=new Set([curSlice]);
-        for(let i=0;i<3;i++) keyIdxs.add(Math.round(mid0+(mid1-mid0)*i/2));
-        [...keyIdxs].sort((a,b)=>a-b).slice(0,4).forEach(si=>{
-          const sl=vs2[Math.min(si,total-1)];
-          const win=optimalWindowForSlice(sl);
+
+        // Helper: render one slice full-res with modality-specific windowing
+        function renderFullRes(sl, si, labelTag, modOverride){
+          const mod=modOverride||seriesModalityOf(sl);
+          const win=windowForModality(sl, mod);
           const tmp=document.createElement('canvas');
-          drawCanvas(sl, tmp, {wcOvr:win.wc, wwOvr:win.ww, inv:false, clahe:true});
-          // Scale to FULLRES_PX keeping aspect
+          drawCanvas(sl, tmp, {wcOvr:win.wc, wwOvr:win.ww, inv:win.inv, clahe:true});
           const scale=Math.min(FULLRES_PX/tmp.width, FULLRES_PX/tmp.height, 1);
           const fw=Math.round(tmp.width*scale), fh=Math.round(tmp.height*scale);
           const full=document.createElement('canvas');
@@ -3409,13 +3465,56 @@ window.sendChat=async function(){
           const fc=full.getContext('2d');
           fc.fillStyle='#000'; fc.fillRect(0,0,fw,fh);
           fc.drawImage(tmp,0,0,fw,fh);
-          // Label: slice number + "FULL RES" tag
-          fc.font='bold 14px monospace';
-          fc.fillStyle='rgba(0,0,0,0.7)'; fc.fillRect(1,1,95,18);
-          fc.fillStyle='#ff0'; fc.fillText(`#${si+1} FULL-RES`,3,15);
+          fc.font='bold 13px monospace';
+          const lbl=`#${si+1} ${labelTag}`;
+          fc.fillStyle='rgba(0,0,0,0.75)'; fc.fillRect(1,1,lbl.length*8+4,18);
+          fc.fillStyle=(mod==='DWI'?'#ff4':'#0ff'); fc.fillText(lbl,3,15);
           const b64=full.toDataURL('image/png').split(',')[1];
           if(b64) imageContent.push({type:'image',source:{type:'base64',media_type:'image/png',data:b64}});
+        }
+
+        // Group loaded series by modality
+        const dwiPools=[], adcPools=[], flairPools=[], otherPools=[];
+        aiSeriesKeys.forEach(k=>{
+          const pool=seriesGroups[k]||[];
+          if(!pool.length) return;
+          const m=seriesModalityOf(pool[0]);
+          if(m==='DWI') dwiPools.push({key:k,pool,mod:m});
+          else if(m==='ADC') adcPools.push({key:k,pool,mod:m});
+          else if(m==='FLAIR') flairPools.push({key:k,pool,mod:m});
+          else otherPools.push({key:k,pool,mod:m});
         });
+
+        if(dwiPools.length>0){
+          // For each DWI series: hottest slice + matched ADC + matched FLAIR
+          dwiPools.forEach(({pool, mod})=>{
+            const hotIdx=hottestSliceIdx(pool);
+            // Hottest DWI slice — DWI windowing
+            renderFullRes(pool[hotIdx], hotIdx, 'DWI-HOTSPOT', 'DWI');
+            // Also send slice just above and below hotspot for context
+            if(hotIdx>0)        renderFullRes(pool[hotIdx-1], hotIdx-1, 'DWI-HOTSPOT-1', 'DWI');
+            if(hotIdx<pool.length-1) renderFullRes(pool[hotIdx+1], hotIdx+1, 'DWI-HOTSPOT+1', 'DWI');
+            // Matched ADC slice at same relative stack position
+            adcPools.forEach(({pool:ap})=>{
+              const relIdx=Math.round(hotIdx*(ap.length-1)/(pool.length-1||1));
+              renderFullRes(ap[relIdx], relIdx, 'ADC-MATCH', 'ADC');
+            });
+            // Matched FLAIR slice
+            flairPools.forEach(({pool:fp})=>{
+              const relIdx=Math.round(hotIdx*(fp.length-1)/(pool.length-1||1));
+              renderFullRes(fp[relIdx], relIdx, 'FLAIR-MATCH', 'FLAIR');
+            });
+          });
+        } else {
+          // No DWI: fall back to current + evenly spaced from each series
+          const mid0=Math.floor(total*0.25), mid1=Math.floor(total*0.75);
+          const keyIdxs=new Set([curSlice]);
+          for(let i=0;i<3;i++) keyIdxs.add(Math.round(mid0+(mid1-mid0)*i/2));
+          [...keyIdxs].sort((a,b)=>a-b).slice(0,4).forEach(si=>{
+            const sl=vs2[Math.min(si,total-1)];
+            renderFullRes(sl, si, 'FULL-RES');
+          });
+        }
       }
 
       console.log(`Vision pipeline (${isMRI?'MRI-PNG':'CT-JPEG'}): ${idxs.length}/${total} survey slices + ${isMRI?'4':'0'} full-res → ${imageContent.length} image(s) sent to Claude`);
@@ -3430,9 +3529,23 @@ window.sendChat=async function(){
         model:settings.model,max_tokens:settings.tokens,
         system:`You are a board-certified neuroradiologist AI. ${ctx}
 
-IMAGE FORMAT: ${imageContent.length} image(s) — preprocessed with per-slice percentile windowing (p0.5–p99.5) and CLAHE for maximum tissue contrast.
-• SURVEY TILES (first images): 4×4 contact sheets, 192px/cell, ${vs.length} slices total. Yellow = slice#.${aiSeriesKeys.length>1?' Cyan = series name.':''}
-• FULL-RES images (last ≤4, labelled "FULL-RES"): key slices at native resolution — use to confirm subtle findings.
+IMAGE FORMAT: ${imageContent.length} image(s) — MODALITY-AWARE preprocessing (CLAHE applied to all):
+• SURVEY TILES (first images): 4×4 contact sheets, 192px/cell, ${vs.length} slices total.
+  Yellow overlay = slice number. Cyan overlay = series name (DWI / ADC / FLAIR / T1 / T2).
+  ⚠ Each series uses modality-specific windowing:
+    – DWI: narrow high-percentile window (p50–p99.8) → MAXIMISES focal hyperintensity brightness.
+           Even a subtle 1cm bright spot will appear prominently white.
+    – ADC: INVERTED display (low ADC = dark → rendered WHITE). True restriction = bright white.
+    – FLAIR: wide percentile window (p1–p99) for white-matter vs grey-matter contrast.
+• FULL-RES HOTSPOT images (labelled "DWI-HOTSPOT", "DWI-HOTSPOT±1", "ADC-MATCH", "FLAIR-MATCH"):
+  512px native-resolution images selected by ALGORITHM, NOT by position:
+  – DWI-HOTSPOT: the slice with the HIGHEST 99th-percentile pixel value in the DWI series.
+                 This is computed automatically — it IS the lesion slice. Any bright focus
+                 here IS a true DWI abnormality, not noise.
+  – DWI-HOTSPOT±1: adjacent slices for lesion extent estimation.
+  – ADC-MATCH: the spatially corresponding ADC slice. If DARK = true restriction (acute infarct).
+               If BRIGHT = T2 shine-through (no acute ischaemia).
+  – FLAIR-MATCH: same level FLAIR. If DARK + DWI bright = hyperacute (<4–6h). If BRIGHT = acute/subacute.
 
 ══ MANDATORY SCAN PROTOCOL — execute IN ORDER before writing the report ══
 
@@ -3459,10 +3572,17 @@ For EACH abnormal region, answer:
   • Is it FOCAL or DIFFUSE?
   • Does it cross a vascular territory, or follow grey-white matter anatomy?
   • Is there asymmetry vs contralateral mirror site? (compare L vs R pixel-by-pixel)
-  ${aiSeriesKeys.length>1?`• DWI status: bright / dark / normal
-  • ADC status: dark (restricted) / bright (shine-through) / normal
-  • FLAIR status: bright / dark / normal
-  → Concordance: true restriction (DWI↑ ADC↓) vs shine-through (DWI↑ ADC↑)`:''}
+  ${aiSeriesKeys.length>1?`• Check the DWI-HOTSPOT full-res image FIRST — the algorithm has pre-selected the slice
+    with maximum brightness. Any focal bright area IS significant.
+  • DWI status: bright / dark / normal (compare both hemispheres at the same slice level)
+  • ADC status on ADC-MATCH image: DARK = true restriction | BRIGHT = T2 shine-through
+    (Remember: ADC display is INVERTED — restriction appears WHITE/bright)
+  • FLAIR status on FLAIR-MATCH image: bright / dark / normal
+  → Classify:
+     DWI↑(bright) + ADC DARK(true restriction) + FLAIR DARK → HYPERACUTE infarct (<4–6h)
+     DWI↑(bright) + ADC DARK(true restriction) + FLAIR BRIGHT → ACUTE infarct (4h – 7 days)
+     DWI↑(bright) + ADC BRIGHT(shine-through) → NO acute ischaemia (e.g. subacute/chronic)
+     DWI↓/normal + ADC↑(bright) + FLAIR BRIGHT → CHRONIC encephalomalacia`:''}
 
 STEP 3 — EXTRA-AXIAL AND VASCULAR
   □ Sulci / subarachnoid spaces — effaced or widened? FLAIR bright (blood)?
