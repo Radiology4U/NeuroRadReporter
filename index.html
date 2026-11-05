@@ -2312,7 +2312,7 @@ X.B(E,Y);return E}return J}())
                   </select>
                 </div>
                 <div class="fg"><label>Max tokens</label>
-                  <input class="inp" id="set-tokens" type="number" value="2048" min="256" max="4096"/>
+                  <input class="inp" id="set-tokens" type="number" value="8192" min="1024" max="32000"/>
                 </div>
                 <div class="fg"><label>Vision slices (1–1000)</label>
                   <input class="inp" id="set-vision-slices" type="number" value="200" min="1" max="1000"/>
@@ -2427,7 +2427,7 @@ let _loadSeq=0; // monotonic counter — unique ID per loaded slice
 let seriesGroups={}, curSeries=null; // series grouping for multi-sequence MRI
 let auditEvents=[];
 let apiKey='';
-let settings={model:'claude-opus-4-5',tokens:2048,lang:'English',inst:'',rad:''};
+let settings={model:'claude-opus-4-5',tokens:8192,lang:'English',inst:'',rad:''};
 let pacsStudies=[];
 
 /* ── INIT ── */
@@ -2478,6 +2478,8 @@ window.saveKey=function(){
 /* ── SETTINGS ── */
 function loadSettings(){
   try{const s=localStorage.getItem('nrr_settings');if(s)settings={...settings,...JSON.parse(s)};}catch{}
+  // Reports now include scan notes + prose: old 2048 default is too small
+  if(!(settings.tokens>=4096)) settings.tokens=8192;
   document.getElementById('set-model').value=settings.model;
   document.getElementById('set-tokens').value=settings.tokens;
   document.getElementById('set-lang').value=settings.lang;
@@ -2491,7 +2493,7 @@ function loadSettings(){
 }
 window.saveSettings=function(){
   settings.model=document.getElementById('set-model').value;
-  settings.tokens=+document.getElementById('set-tokens').value;
+  settings.tokens=Math.min(32000,Math.max(1024,+document.getElementById('set-tokens').value||8192));
   settings.lang=document.getElementById('set-lang').value;
   settings.inst=document.getElementById('set-inst').value;
   settings.rad=document.getElementById('set-rad').value;
@@ -4272,7 +4274,22 @@ Reply in ${settings.lang}.`+(cadReport?'\n\n'+cadReport:'')+(settings.anatomyRef
     });
     if(!r.ok){const j=await r.json();throw new Error(j.error?.message||r.statusText);}
     const d=await r.json();
-    const txt=d.content?.[0]?.text||'No response';
+    // Collect ALL text blocks — newer models may return thinking / tool blocks before the text
+    const blocks=Array.isArray(d.content)?d.content:[];
+    let txt=blocks.filter(b=>b&&b.type==='text'&&b.text).map(b=>b.text).join('\n\n').trim();
+    const stop=d.stop_reason||'';
+    if(!txt){
+      const kinds=blocks.map(b=>b&&b.type).join(', ')||'none';
+      const why=stop==='max_tokens'?'the token limit was reached before any text was written — increase Max tokens in Settings & Info'
+        :stop==='refusal'?'the model declined to answer this request'
+        :'the reply contained no text';
+      audit('AI','Empty response: stop_reason='+stop+', blocks='+kinds);
+      throw new Error('No report text returned ('+why+'). Model: '+settings.model+', stop_reason: '+(stop||'—')+', content blocks: '+kinds+'.');
+    }
+    if(stop==='max_tokens'){
+      txt+='\n\n⚠ Report cut off: the token limit ('+settings.tokens+') was reached. Increase Max tokens in Settings & Info and run again.';
+      toast('Report cut off — increase Max tokens','warn');
+    }
     const am=document.createElement('div');am.className='msg ai';
     am.innerHTML=`<div class="msg-bubble">${renderAIMessage(txt)}</div>`;
     msgs.appendChild(am);msgs.scrollTop=msgs.scrollHeight;
