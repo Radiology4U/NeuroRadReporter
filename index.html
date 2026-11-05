@@ -2228,6 +2228,31 @@ X.B(E,Y);return E}return J}())
 
             </div>
           </div>
+          <div class="card">
+            <div class="card-hdr">📚 Anatomy Reference</div>
+            <div class="card-body">
+              <div class="rag-source-row">
+                <div style="display:flex;align-items:center;gap:8px;flex:1">
+                  <label class="rag-toggle-wrap">
+                    <input type="checkbox" id="anat-ref-on" checked onchange="saveAnatPref()">
+                    <span class="rag-toggle-track"></span>
+                  </label>
+                  <div>
+                    <div style="font-size:13px;font-weight:600">Built-in neuroanatomy context</div>
+                    <div style="font-size:11px;color:var(--t3)">Axial landmark levels, vascular territories, stroke patterns, DWI/FLAIR/CT mimics — added to every AI analysis. Offline, no licence restrictions.</div>
+                  </div>
+                </div>
+                <button class="btn sm" onclick="previewAnatomyRef()">Preview</button>
+              </div>
+              <pre id="anat-ref-preview" style="display:none;white-space:pre-wrap;font-size:11px;line-height:1.5;max-height:320px;overflow:auto;background:var(--s2);border:1px solid var(--bd);border-radius:6px;padding:10px;margin:8px 0 0;font-family:var(--mono);color:var(--t2)"></pre>
+
+              <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--bd)">
+                <div style="font-size:12px;font-weight:600;margin-bottom:4px">Reference atlases — for your own lookup</div>
+                <a href="https://www.imaios.com/en" target="_blank" rel="noopener noreferrer" style="font-size:13px;color:var(--ac);font-weight:500;text-decoration:none">IMAIOS e-Anatomy ↗</a>
+                <div style="font-size:11px;color:var(--t3);margin-top:3px">Opens in a new tab. Not used by the AI: IMAIOS terms allow personal use only and prohibit extracting their content.</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -2306,6 +2331,7 @@ function loadSettings(){
   document.getElementById('set-vision-slices').value=settings.visionSlices||200;
   document.getElementById('rag-pubmed-on').checked=settings.ragPubmed!==false;
   document.getElementById('rag-radio-on').checked=settings.ragRadiopaedia!==false;
+  const _ar=document.getElementById('anat-ref-on'); if(_ar) _ar.checked=settings.anatomyRef!==false;
 }
 window.saveSettings=function(){
   settings.model=document.getElementById('set-model').value;
@@ -2320,7 +2346,7 @@ window.saveSettings=function(){
 window.saveRagPrefs=function(){
   settings.ragPubmed=document.getElementById('rag-pubmed-on').checked;
   settings.ragRadiopaedia=document.getElementById('rag-radio-on').checked;
-  localStorage.setItem('nrr-settings',JSON.stringify(settings));
+  try{localStorage.setItem('nrr_settings',JSON.stringify(settings));}catch{}
 };
 window.testPubmed=async function(){
   const st=document.getElementById('rag-pubmed-status');
@@ -2910,6 +2936,94 @@ function updateWindowPresets(isCT){
       </span>`;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BUILT-IN NEUROANATOMY REFERENCE (original text, no third-party content)
+   Injected into the AI system prompt when Settings → Anatomy reference is on.
+   ══════════════════════════════════════════════════════════════════════════ */
+const ANATOMY_REF={
+  levels:[
+    ['L1 Foramen magnum / medulla',
+     'Landmarks: medulla (pyramids anteriorly, olives laterally), cerebellar tonsils, vertebral arteries, cisterna magna.',
+     'Territories: PICA (lateral medulla, inferior cerebellar hemisphere + inferior vermis); anterior spinal / vertebral perforators (medial medulla).',
+     'Pitfalls: skull-base susceptibility on DWI; tonsils up to ~5 mm below the foramen magnum can be normal in adults.'],
+    ['L2 Pons / 4th ventricle',
+     'Landmarks: pons, 4th ventricle, middle cerebellar peduncles, cerebellar hemispheres, IAC / CP angle, temporal poles, mastoids.',
+     'Territories: basilar paramedian perforators (paramedian pons, wedge reaching the ventral surface); AICA (anterior-inferior cerebellum, MCP, lateral pons); SCA (superior cerebellum, upper vermis).',
+     'Pitfalls: petrous / mastoid air susceptibility mimicking DWI foci in temporal lobes and pons; CSF pulsation in the 4th ventricle and prepontine cistern on FLAIR.'],
+    ['L3 Midbrain / suprasellar',
+     'Landmarks: cerebral peduncles, substantia nigra, red nuclei, aqueduct, interpeduncular + ambient + quadrigeminal + suprasellar cisterns, uncus, amygdala, hippocampi, circle of Willis (M1, A1, P1/P2, basilar tip).',
+     'Territories: PCA (medial temporal lobe, hippocampus, occipital lobe); paramedian midbrain / artery of Percheron; anterior choroidal (medial temporal lobe, optic tract).',
+     'Pitfalls: hippocampi are normally slightly FLAIR-brighter than cortex; check uncus vs. tentorial edge for herniation; effaced basal cisterns = raised ICP.'],
+    ['L4 3rd ventricle / basal ganglia (CT: ASPECTS ganglionic level)',
+     'Landmarks: 3rd ventricle, thalami, caudate heads, putamen + globus pallidus (lentiform), internal capsule (anterior limb, genu, posterior limb), insula + Sylvian fissure, frontal horns, septum pellucidum, foramen of Monro, pineal.',
+     'Territories: MCA lenticulostriates (putamen, outer globus pallidus, caudate body, upper internal capsule); recurrent artery of Heubner/ACA (caudate head, anterior limb); anterior choroidal (lower posterior limb, medial pallidum, lateral geniculate); PCA thalamoperforators (paramedian thalami) and thalamogeniculates (lateral thalamus); MCA superficial (insula, frontal operculum, temporal cortex). ASPECTS: C, L, IC, I, M1, M2, M3.',
+     'Pitfalls: perivascular spaces at the anterior perforated substance (CSF signal, no restriction); pallidal mineralisation (T2/SWI dark); early MCA ischaemia = loss of insular ribbon and blurred lentiform nucleus; bilateral paramedian thalamic DWI = artery of Percheron, deep venous thrombosis, Wernicke.'],
+    ['L5 Bodies of lateral ventricles',
+     'Landmarks: corpus callosum (genu, body, splenium), caudate bodies, corona radiata, periventricular white matter, trigones with choroid plexus.',
+     'Territories: MCA deep medullary perforators (corona radiata); internal border-zone between deep and superficial MCA (chain of lesions parallel to the ventricle = haemodynamic / carotid stenosis); ACA pericallosal (genu + body); PCA (splenium).',
+     'Pitfalls: FLAIR periventricular caps at frontal horns and thin bands along ventricles are normal; choroid plexus can show mild bilateral DWI signal; isolated ovoid splenial DWI lesion = cytotoxic lesion of the corpus callosum (CLOCC), not necessarily infarct.'],
+    ['L6 Centrum semiovale (CT: ASPECTS supraganglionic M4–M6)',
+     'Landmarks: centrum semiovale, convexity sulci, falx, parasagittal cortex.',
+     'Territories: ACA (medial ~2 cm parasagittal strip); MCA superficial (lateral convexity); ACA–MCA cortical watershed (frontal-parasagittal); MCA–PCA watershed (parieto-occipital); internal border-zone continues from L5.',
+     'Pitfalls: perivascular spaces; small-vessel white-matter disease (grade with Fazekas) is not acute unless DWI-positive.'],
+    ['L7 High convexity / vertex',
+     'Landmarks: precentral gyrus with hand knob (inverted omega), central sulcus, postcentral gyrus, superior frontal gyrus, paracentral lobule, superior sagittal sinus, cortical veins.',
+     'Territories: ACA (paracentral lobule = leg motor/sensory); MCA (lateral precentral = hand/face); watershed between them.',
+     'Pitfalls: partial volume of calvarium on the top slices; slow flow in the superior sagittal sinus vs thrombosis (confirm on another sequence); cortical vein thrombosis → non-arterial cortical/subcortical lesion ± haemorrhage.']
+  ],
+  patterns:[
+    'Territorial infarct: cortex + underlying white matter, wedge-shaped, respects one arterial territory.',
+    'Lacunar infarct: < 15 mm, deep perforator territory (basal ganglia, internal capsule, thalamus, pons, corona radiata).',
+    'Border-zone: cortical (ACA–MCA, MCA–PCA) or internal (corona radiata/centrum semiovale chain) → hypoperfusion / proximal stenosis.',
+    'Multiple territories (bilateral, or anterior + posterior circulation) → embolic, consider cardiac source.',
+    'Not respecting arterial territories, near a dural sinus, ± haemorrhage → venous infarct.'
+  ],
+  dwiMimics:[
+    'T2 shine-through: DWI bright with normal/high ADC → not acute restriction.',
+    'Susceptibility artefact: orbitofrontal (frontal sinus), anterior temporal (petrous), pons/cerebellum near mastoids.',
+    'Physiological: cortex slightly brighter than white matter at b1000; posterior limb of the internal capsule / corticospinal tracts mildly bright bilaterally (anisotropy); choroid plexus.',
+    'Restriction that is NOT stroke: abscess (central), epidermoid, lymphoma / hypercellular tumour, CJD (cortical ribboning, caudate/putamen), post-ictal (cortex, hippocampus, pulvinar, non-territorial), hypoglycaemia (cortex, basal ganglia, internal capsules bilaterally), Wernicke, active demyelination (often incomplete ring), diffuse axonal injury (grey–white junction, corpus callosum), CLOCC (splenium).',
+    'Vasogenic oedema (PRES, tumour) → ADC HIGH.'
+  ],
+  flairPitfalls:[
+    'CSF flow artefact in basal cisterns, 3rd/4th ventricle and prepontine cistern.',
+    'Incomplete CSF suppression (high inspired O2, propofol, motion) → sulcal hyperintensity mimicking SAH/meningitis.',
+    'FLAIR hyperintense vessel sign (slow distal flow) supports large-vessel occlusion — report it.',
+    'Periventricular caps / bands normal; Fazekas for small-vessel disease.'
+  ],
+  ctSigns:[
+    'Hyperdense artery sign (MCA, basilar), insular ribbon sign, lentiform obscuration, sulcal effacement, loss of grey–white differentiation.',
+    'ASPECTS: 10 regions (C, L, IC, I, M1–M3 at ganglionic level; M4–M6 supraganglionic), subtract 1 per region with early ischaemic change.'
+  ]
+};
+
+/** Build the anatomy context text for the system prompt, tailored to the loaded modalities. */
+function buildAnatomyContext(mods){
+  const R=ANATOMY_REF, L=[];
+  L.push('## NEUROANATOMY REFERENCE (built-in) — use it to name structures, levels and territories precisely');
+  L.push('Axial levels, inferior → superior:');
+  R.levels.forEach(l=>L.push('• '+l[0]+'\n   '+l[1]+'\n   '+l[2]+'\n   '+l[3]));
+  L.push('Stroke patterns:\n'+R.patterns.map(p=>'• '+p).join('\n'));
+  const has=m=>mods.has(m);
+  if(has('DWI')||has('ADC')||has('UNK')) L.push('DWI/ADC mimics and pitfalls:\n'+R.dwiMimics.map(p=>'• '+p).join('\n'));
+  if(has('FLAIR')||has('UNK')) L.push('FLAIR pitfalls:\n'+R.flairPitfalls.map(p=>'• '+p).join('\n'));
+  if(has('CT')) L.push('CT early ischaemia:\n'+R.ctSigns.map(p=>'• '+p).join('\n'));
+  L.push('For every finding (and every CAD-n candidate) name the matching level above, the exact structure, the arterial territory, and consider the listed mimics before concluding.');
+  return L.join('\n');
+}
+window.previewAnatomyRef=function(){
+  const el=document.getElementById('anat-ref-preview');
+  if(!el) return;
+  if(el.style.display==='block'){el.style.display='none';return;}
+  el.textContent=buildAnatomyContext(new Set(['DWI','ADC','FLAIR','CT']));
+  el.style.display='block';
+};
+window.saveAnatPref=function(){
+  settings.anatomyRef=document.getElementById('anat-ref-on').checked;
+  try{localStorage.setItem('nrr_settings',JSON.stringify(settings));}catch{}
+  toast('Anatomy reference '+(settings.anatomyRef?'enabled':'disabled'),'ok');
+};
 
 /* ══════════════════════════════════════════════════════════════════════════
    AI IMAGE ANALYSIS CORE
@@ -3882,7 +3996,7 @@ SIGNAL RULES (apply during Step 2):
 • NEVER call a region normal without explicitly comparing it to its contralateral mirror
 • A normal brain on FLAIR = uniformly grey cortex and white matter; CSF = black; no focal bright patches
 
-Reply in ${settings.lang}.`+(cadReport?'\n\n'+cadReport:'')+(ragContext?'\n\n'+ragContext:''),
+Reply in ${settings.lang}.`+(cadReport?'\n\n'+cadReport:'')+(settings.anatomyRef!==false?'\n\n'+buildAnatomyContext(new Set(aiSeriesKeys.map(k=>seriesModalityOf((seriesGroups[k]||[])[0])))):'')+(ragContext?'\n\n'+ragContext:''),
         messages:[{role:'user',content:[...imageContent,{type:'text',text:prompt}]}]
       })
     });
