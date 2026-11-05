@@ -370,7 +370,7 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
   padding:8px 12px;border-radius:var(--r);font-size:12.5px;line-height:1.6;
 }
 .msg.user .msg-bubble{background:var(--ac);color:#fff;border-radius:var(--r) var(--r) 2px var(--r)}
-.msg.ai .msg-bubble{background:var(--sur);border:1px solid var(--bd);color:var(--tx);white-space:pre-wrap;font-family:var(--mono);border-radius:2px var(--r) var(--r) var(--r)}
+.msg.ai .msg-bubble{background:var(--sur);border:1px solid var(--bd);color:var(--tx);white-space:pre-wrap;font-family:var(--font);font-size:13px;line-height:1.65;border-radius:2px var(--r) var(--r) var(--r)}
 .chat-input-row{
   display:flex;gap:0;border:1px solid var(--bdm);
   border-radius:0 0 var(--rs) var(--rs);overflow:hidden;
@@ -541,6 +541,14 @@ textarea.inp{resize:vertical;min-height:72px;line-height:1.5}
 .lg{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px;border:1px solid}
 .lg.loc{background:var(--sur);border-color:#93C5FD}.lg.ai{background:var(--pul);border-color:#C4B5FD}
 .lg.cad{background:var(--gnl);border-color:#6EE7B7}.lg.ext{background:var(--s3);border-color:var(--bdm)}
+
+/* Report rendering */
+.rep-major{color:#DC2626;font-weight:600}
+.rep-h{font-weight:700;font-size:11.5px;letter-spacing:.5px;color:var(--ac)}
+.rep-preview{border:1px solid var(--bd);border-radius:8px;background:var(--sur);padding:12px 14px;font-size:13px;line-height:1.7;white-space:pre-wrap;color:var(--tx);min-height:64px}
+.scan-notes{margin:0 0 10px;border:1px solid var(--bd);border-radius:6px;background:var(--s2);white-space:normal}
+.scan-notes summary{cursor:pointer;padding:6px 10px;font-size:11.5px;font-weight:600;color:var(--t2)}
+.scan-notes>div{padding:4px 10px 10px;font-family:var(--mono);font-size:11px;line-height:1.55;color:var(--t2);white-space:pre-wrap;max-height:260px;overflow:auto}
 </style>
 <!-- UTIF.js: lightweight TIFF decoder (MIT licence) -->
 <script>/* UTIF.js 3.1.0 (MIT) - inline to avoid CDN dependency */
@@ -1811,7 +1819,7 @@ X.B(E,Y);return E}return J}())
       </button>
 
       <div class="sb-footer">
-        <strong>v1.2-pre — research only</strong>
+        <strong>v1.4-pre — research only</strong>
         <div class="comp-dot gr">EU AI Act ready</div>
         <div class="comp-dot pu">HIPAA safeguards</div>
         <div class="comp-dot rd">Not for clinical use</div>
@@ -1986,8 +1994,8 @@ X.B(E,Y);return E}return J}())
             <div class="card-hdr">📄 Structured Report</div>
             <div class="card-body">
               <div class="form-grid" style="margin-bottom:10px">
-                <div class="fg"><label>Indication</label><input class="inp" id="sf-ind" placeholder="Clinical indication…"/></div>
-                <div class="fg"><label>Technique</label><input class="inp" id="sf-tech" placeholder="MRI brain without contrast…"/></div>
+                <div class="fg"><label>Indication</label><input class="inp" id="sf-ind" placeholder="Clinical indication…" oninput="updateReportPreview()"/></div>
+                <div class="fg"><label>Technique</label><input class="inp" id="sf-tech" placeholder="MRI brain without contrast…" oninput="updateReportPreview()"/></div>
                 <div class="fg"><label>Modality</label>
                   <select class="inp" id="sf-mod">
                     <option value="">—</option><option>CT</option><option>MRI</option>
@@ -1995,14 +2003,16 @@ X.B(E,Y);return E}return J}())
                   </select>
                 </div>
                 <div class="fg"><label>Urgency</label>
-                  <select class="inp" id="sf-urg">
+                  <select class="inp" id="sf-urg" onchange="updateReportPreview()">
                     <option value="">—</option><option>Routine</option>
                     <option>Semi-urgent (2 weeks)</option><option>Urgent (48h)</option>
                     <option>STAT — notify immediately</option>
                   </select>
                 </div>
-                <div class="fg full"><label>Findings</label><textarea class="inp" id="sf-find" placeholder="Key imaging findings by anatomical region…" rows="4"></textarea></div>
-                <div class="fg full"><label>Impression</label><textarea class="inp" id="sf-imp" placeholder="Clinical impression and recommendations…" rows="3"></textarea></div>
+                <div class="fg full"><label>Findings</label><textarea class="inp" id="sf-find" placeholder="Findings in running prose — principal abnormality first, then other findings, then pertinent negatives…" rows="6" oninput="updateReportPreview()"></textarea></div>
+                <div class="fg full"><label>Impression</label><textarea class="inp" id="sf-imp" placeholder="Numbered conclusions and recommendations…" rows="3" oninput="updateReportPreview()"></textarea></div>
+                <div class="fg full"><label>Report preview <span style="font-weight:400;color:var(--t3)">— major abnormalities in red · mark text yourself with [[double brackets]]</span></label>
+                  <div id="sf-preview" class="rep-preview"><span style="color:var(--t3)">The formatted report appears here. Major abnormalities are shown in red.</span></div></div>
               </div>
               <div class="btn-row">
                 <button class="btn sm" onclick="exportHL7()">📤 HL7 FHIR</button>
@@ -2194,11 +2204,15 @@ X.B(E,Y);return E}return J}())
               <p class="about-lead">NeuroRadReporter turns brain MRI and CT studies into a structured neuroradiology report draft. Everything except the AI call runs inside your browser: there is no backend, and no images or patient data are stored on any server.</p>
 
               <div class="about-grid">
-                <div><span class="about-k">Version</span><span class="about-v">v1.2-pre · research use only</span></div>
+                <div><span class="about-k">Version</span><span class="about-v">v1.4-pre · research use only</span></div>
+                <div><span class="about-k">Project started</span><span class="about-v">28 October 2026</span></div>
                 <div><span class="about-k">Hosting</span><span class="about-v">Static page on GitHub Pages</span></div>
                 <div><span class="about-k">AI model</span><span class="about-v" id="about-model">—</span></div>
                 <div><span class="about-k">Inputs</span><span class="about-v">DICOM · JPG · PNG · TIFF · PACS (DICOMweb, Orthanc, FHIR)</span></div>
               </div>
+
+              <h3 class="about-h">Vision</h3>
+              <p>NeuroRadReporter is meant to become an ambient assistant that works quietly in the background of the radiologist's existing workflow. Studies arriving from PACS are pre-read automatically: the systematic checks, measurements and sequence-by-sequence comparisons are done before the radiologist opens the case, and a structured draft report with the major abnormalities highlighted is ready to review, edit and sign. The radiologist stays in charge of every diagnosis. The tool takes over the repetitive parts of reading and reporting so that more time goes to interpretation, difficult cases and the patient.</p>
 
               <h3 class="about-h">Architecture</h3>
               <div class="arch-wrap">
@@ -2419,7 +2433,7 @@ let pacsStudies=[];
 /* ── INIT ── */
 loadSavedKey();
 loadSettings();
-audit('SYS','Application started — v1.2-pre');
+audit('SYS','Application started — v1.4-pre');
 
 /* ── NAV ── */
 window.nav=function(id,btn){
@@ -4246,6 +4260,12 @@ SIGNAL RULES (apply during Step 2):
 • NEVER call a region normal without explicitly comparing it to its contralateral mirror
 • A normal brain on FLAIR = uniformly grey cortex and white matter; CSF = black; no focal bright patches
 
+REPORT STYLE (whenever you write FINDINGS / IMPRESSION):
+• Steps 0–3 are working notes: put them ONLY in a "SCAN NOTES:" section before the report, never inside FINDINGS.
+• FINDINGS = running prose in short, well-structured paragraphs, not one line per anatomical region. Lead with the principal abnormality (side, structure, level, size, signal on each sequence, enhancement, mass effect, territory), then other findings, then pertinent negatives grouped in one or two sentences (e.g. "There is no haemorrhage, mass effect or hydrocephalus; the basal cisterns are patent.").
+• IMPRESSION = 1–4 numbered conclusions in full sentences, most important first.
+• Mark MAJOR abnormalities — clinically significant, actionable or urgent (e.g. acute infarct, haemorrhage, mass, abscess, herniation, hydrocephalus, significant midline shift, vessel occlusion) — by wrapping their key phrase in double square brackets: "[[acute infarct in the right corona radiata]]". Do not bracket minor, chronic-incidental or normal findings.
+
 Reply in ${settings.lang}.`+(cadReport?'\n\n'+cadReport:'')+(settings.anatomyRef!==false?'\n\n'+buildAnatomyContext(new Set(aiSeriesKeys.map(k=>seriesModalityOf((seriesGroups[k]||[])[0])))):'')+(ragContext?'\n\n'+ragContext:''),
         messages:[{role:'user',content:[...imageContent,{type:'text',text:prompt}]}]
       })
@@ -4254,7 +4274,7 @@ Reply in ${settings.lang}.`+(cadReport?'\n\n'+cadReport:'')+(settings.anatomyRef
     const d=await r.json();
     const txt=d.content?.[0]?.text||'No response';
     const am=document.createElement('div');am.className='msg ai';
-    am.innerHTML=`<div class="msg-bubble">${esc(txt)}</div>`;
+    am.innerHTML=`<div class="msg-bubble">${renderAIMessage(txt)}</div>`;
     msgs.appendChild(am);msgs.scrollTop=msgs.scrollHeight;
     audit('AI','Response: '+txt.length+' chars');
     // Auto-fill structured report form if response contains labelled sections
@@ -4276,19 +4296,19 @@ function setActionBusy(busy){
   });
 }
 window.generateReport=async function(){
-  document.getElementById('chat-input').value='Generate a complete structured neuroradiology report. Output EXACTLY these labeled sections:\n\nTECHNIQUE:\n[technique text]\n\nFINDINGS:\n[detailed findings by anatomical region, one per anatomical area]\n\nIMPRESSION:\n[clinical impression and key diagnosis]\n\nURGENCY:\n[Routine | Semi-urgent (2 weeks) | Urgent (48h) | STAT — notify immediately]';
+  document.getElementById('chat-input').value='Generate a complete structured neuroradiology report. Output EXACTLY these labeled sections:\n\nSCAN NOTES:\n[your systematic scan (Steps 0–3) in compact note form]\n\nTECHNIQUE:\n[one sentence: modality, sequences, contrast]\n\nFINDINGS:\n[running prose in 2–3 short paragraphs, NOT a list per anatomical region: (1) the principal abnormality fully characterised, (2) other and incidental findings, (3) pertinent negatives in one or two sentences. Wrap every major abnormality in [[double brackets]].]\n\nIMPRESSION:\n[1–4 numbered conclusions in full sentences, most important first, with recommendation where relevant. Wrap major abnormalities in [[double brackets]].]\n\nURGENCY:\n[Routine | Semi-urgent (2 weeks) | Urgent (48h) | STAT — notify immediately]';
   setActionBusy(true);
   await sendChat();
   setActionBusy(false);
 };
 window.generateSummary=async function(){
-  document.getElementById('chat-input').value='Generate a concise clinical summary of the key imaging findings. Format as:\n\nFINDINGS:\n[2–4 sentence summary of the most important findings]\n\nIMPRESSION:\n[1–2 sentence overall impression]';
+  document.getElementById('chat-input').value='Generate a concise clinical summary of the key imaging findings. Format as:\n\nFINDINGS:\n[2–4 sentences of running prose, most important finding first; wrap major abnormalities in [[double brackets]]]\n\nIMPRESSION:\n[1–2 sentence overall impression]';
   setActionBusy(true);
   await sendChat();
   setActionBusy(false);
 };
 window.generateDifferential=async function(){
-  document.getElementById('chat-input').value='Based on the imaging, provide a ranked differential diagnosis. Format as:\n\nFINDINGS:\n[Brief description of the imaging features driving the differential]\n\nIMPRESSION:\nDifferential diagnosis (most to least likely):\n1. [Most likely diagnosis] — [rationale]\n2. [Second] — [rationale]\n3. [Third] — [rationale]\nRecommended next step: [recommendation]';
+  document.getElementById('chat-input').value='Based on the imaging, provide a ranked differential diagnosis. Format as:\n\nFINDINGS:\n[Brief running-prose description of the imaging features driving the differential; wrap major abnormalities in [[double brackets]]]\n\nIMPRESSION:\nDifferential diagnosis (most to least likely):\n1. [Most likely diagnosis] — [rationale]\n2. [Second] — [rationale]\n3. [Third] — [rationale]\nRecommended next step: [recommendation]';
   setActionBusy(true);
   await sendChat();
   setActionBusy(false);
@@ -4329,6 +4349,7 @@ function fillReportFromAI(txt){
     else if(/\bPET/i.test(technique)) mod.value='PET-CT';
   }
 
+  updateReportPreview();
   if(findings||impression){
     toast('Report fields auto-filled ✓','ok');
     // Scroll down to show the structured report
@@ -4347,9 +4368,9 @@ window.copyReport=function(){
     'Technique: '+(document.getElementById('sf-tech').value||'—'),
     'Modality: '+(document.getElementById('sf-mod').value||'—'),
     '',
-    'FINDINGS:',document.getElementById('sf-find').value||'—',
+    'FINDINGS:',stripMk(document.getElementById('sf-find').value)||'—',
     '',
-    'IMPRESSION:',document.getElementById('sf-imp').value||'—',
+    'IMPRESSION:',stripMk(document.getElementById('sf-imp').value)||'—',
     'Urgency: '+(document.getElementById('sf-urg').value||'—'),
   ].filter(Boolean).join('\n');
   navigator.clipboard.writeText(lines).then(()=>toast('Copied','ok'));
@@ -4362,12 +4383,12 @@ window.exportHL7=function(){
     subject:{display:anonPID(slices[0]?.patientName)},
     effectiveDateTime:new Date().toISOString().slice(0,10),
     issued:new Date().toISOString(),
-    conclusion:document.getElementById('sf-imp').value};
+    conclusion:stripMk(document.getElementById('sf-imp').value)};
   dl('report_fhir.json',JSON.stringify(res,null,2),'application/json');
   audit('REP','HL7 FHIR exported');toast('HL7 FHIR exported','ok');
 };
 window.exportSR=function(){
-  const imp=document.getElementById('sf-imp').value;
+  const imp=stripMk(document.getElementById('sf-imp').value);
   if(!imp){toast('Add impression first','warn');return;}
   const now=new Date();
   const dateStr=now.toISOString().slice(0,10);
@@ -4391,15 +4412,15 @@ window.exportSR=function(){
     (document.getElementById('sf-mod').value?' ['+document.getElementById('sf-mod').value+']':''),
     '',
     'FINDINGS',
-    document.getElementById('sf-find').value||'—',
+    stripMk(document.getElementById('sf-find').value)||'—',
     '',
     'IMPRESSION',
-    document.getElementById('sf-imp').value||'—',
+    stripMk(document.getElementById('sf-imp').value)||'—',
     '',
     'URGENCY: '+(document.getElementById('sf-urg').value||'—'),
     '',
     '───────────────────────────────────────────────────────',
-    'Generated by NeuroRadReporter v1.2-pre (research use only)',
+    'Generated by NeuroRadReporter v1.4-pre (research use only)',
     'Not validated for clinical diagnosis. Not CE marked.',
     '═══════════════════════════════════════════════════════',
   ].join('\n');
@@ -4578,6 +4599,32 @@ window.pushReport=function(){
 
 /* ── HELPERS ── */
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+/* ── Report rendering: [[major abnormality]] → red; section labels bold ── */
+function stripMk(s){return String(s||'').replace(/\[\[([\s\S]+?)\]\]/g,'$1');}
+function renderReportHTML(txt){
+  let h=esc(txt);
+  h=h.replace(/\[\[([\s\S]+?)\]\]/g,'<span class="rep-major">$1</span>');
+  h=h.replace(/^(\s*)(TECHNIQUE|FINDINGS|IMPRESSION|URGENCY|INDICATION|DIFFERENTIAL[^:\n]*|Recommended next step):/gim,'$1<span class="rep-h">$2:</span>');
+  h=h.replace(/(URGENCY:<\/span>\s*)(STAT[^\n]*|Urgent[^\n]*)/i,'$1<span class="rep-major">$2</span>');
+  return h;
+}
+function renderAIMessage(txt){
+  const m=String(txt||'').match(/SCAN NOTES:\s*([\s\S]*?)(?=\n\s*(?:TECHNIQUE|FINDINGS)\s*:)/i);
+  if(!m) return renderReportHTML(txt);
+  const rest=txt.replace(m[0],'').replace(/^\s+/,'');
+  return `<details class="scan-notes"><summary>Systematic scan notes</summary><div>${esc(m[1].trim())}</div></details>`+renderReportHTML(rest);
+}
+window.updateReportPreview=function(){
+  const el=document.getElementById('sf-preview'); if(!el) return;
+  const g=id=>(document.getElementById(id)?.value||'').trim();
+  const parts=[];
+  if(g('sf-ind')) parts.push('INDICATION:\n'+g('sf-ind'));
+  if(g('sf-tech')) parts.push('TECHNIQUE:\n'+g('sf-tech'));
+  if(g('sf-find')) parts.push('FINDINGS:\n'+g('sf-find'));
+  if(g('sf-imp')) parts.push('IMPRESSION:\n'+g('sf-imp'));
+  if(g('sf-urg')) parts.push('URGENCY:\n'+g('sf-urg'));
+  el.innerHTML=parts.length?renderReportHTML(parts.join('\n\n')):'<span style="color:var(--t3)">The formatted report appears here. Major abnormalities are shown in red.</span>';
+};
 function dl(name,content,mime){
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([content],{type:mime}));
