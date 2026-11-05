@@ -2270,7 +2270,7 @@ X.B(E,Y);return E}return J}())
               </div>
 
               <h3 class="about-h">How a report is made</h3>
-              <p>Images are parsed and grouped into series, then anonymised before anything else happens. When you request a report, each selected series is enhanced for its sequence and tiled into contact sheets. The lesion pre-screen measures every slice: it finds focal bright clusters that the other hemisphere does not have, follows them across neighbouring slices, and measures ADC and FLAIR at the same spot. The prompt combines those measurements with a mandatory scan protocol, landmark levels L1–L7, the built-in anatomy reference and matching literature. Claude returns the report, which fills the structured form for you to review, edit and export.</p>
+              <p>Images are parsed and grouped into series, then anonymised before anything else happens. When you request a report, each selected series is enhanced for its sequence and tiled into contact sheets. The lesion pre-screen measures every slice: it finds focal bright clusters that the other hemisphere does not have, follows them across neighbouring slices, and measures ADC and FLAIR at the same spot. The prompt combines those measurements with a mandatory scan protocol, the built-in anatomy reference and matching literature. The scan protocol makes the AI place every slice at one of seven anatomical levels, from the foramen magnum up to the vertex, recognised by the landmarks a neuroradiologist uses: (1) foramen magnum and medulla, (2) pons and 4th ventricle, (3) midbrain and suprasellar cistern, (4) 3rd ventricle and basal ganglia, (5) bodies of the lateral ventricles, (6) centrum semiovale and (7) high convexity and vertex. This stops it from skipping the posterior fossa or the vertex, and every finding is tied to a level, a structure and a vascular territory. These level numbers are only used internally and do not appear in your report. Claude returns the report, which fills the structured form for you to review, edit and export.</p>
 
               <h3 class="about-h">Privacy</h3>
               <p>Your API key is kept in this browser's local storage only. DICOM patient tags are removed before images leave your machine, and only anonymised images and text go to the Anthropic API over HTTPS. Burned-in text inside JPG/PNG screenshots cannot be detected automatically, so crop it out before loading.</p>
@@ -4079,7 +4079,8 @@ Assign every image / tile to a level using these landmarks and list the image nu
   L7 High convexity / vertex · central sulcus (pre/postcentral gyri, hand knob)
 At each level check: midline (septum pellucidum, falx, 3rd ventricle) for shift · ventricle size & symmetry · basal cisterns patent or effaced · grey–white differentiation · insular ribbon & lentiform nucleus (early MCA signs) · cortical ribbon & sulcal symmetry L vs R · flow voids (ICA, MCA, basilar).
 Map every lesion to a vascular territory: ACA · MCA superficial (cortical) vs deep (lenticulostriate) · PCA · anterior choroidal · thalamoperforators · posterior circulation (PICA, AICA, SCA, basilar perforators) · watershed zones (ACA–MCA, MCA–PCA, internal border-zone in corona radiata / centrum semiovale).
-Every finding MUST be written as: side · lobe/structure · landmark level · vascular territory · image #.
+Every finding MUST be written as: side · lobe/structure · level · vascular territory · image #.
+The L1–L7 codes are internal working labels only: NEVER write "L1"–"L7" in the report — describe the level in anatomical words (e.g. "at the level of the bodies of the lateral ventricles").
 
 STEP 1 — PARENCHYMA SIGNAL SURVEY
 For each region, state explicitly: signal NORMAL or ABNORMAL, and the slice number(s):
