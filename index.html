@@ -2226,7 +2226,7 @@ X.B(E,Y);return E}return J}())
 
                 <!-- row 2: AI pipeline -->
                 <g class="n-ai"><rect x="205" y="235" width="170" height="60" rx="9"/><text x="290" y="259" class="t1">Enhancement</text><text x="290" y="278" class="t2">modality · windowing · CLAHE</text></g>
-                <g class="n-cad"><rect x="400" y="235" width="170" height="60" rx="9"/><text x="485" y="259" class="t1">Lesion pre-screen (CAD)</text><text x="485" y="278" class="t2">asymmetry · ADC · FLAIR</text></g>
+                <g class="n-cad"><rect x="400" y="235" width="170" height="60" rx="9"/><text x="485" y="259" class="t1">Lesion pre-screen (CAD)</text><text x="485" y="278" class="t2">all sequences · signal profile</text></g>
                 <g class="n-ai"><rect x="595" y="235" width="170" height="60" rx="9"/><text x="680" y="259" class="t1">Prompt builder</text><text x="680" y="278" class="t2">protocol · landmarks · anatomy</text></g>
 
                 <!-- row 3 -->
@@ -2270,13 +2270,13 @@ X.B(E,Y);return E}return J}())
               </div>
 
               <h3 class="about-h">How a report is made</h3>
-              <p>Images are parsed and grouped into series, then anonymised before anything else happens. When you request a report, each selected series is enhanced for its sequence and tiled into contact sheets. The lesion pre-screen measures every slice: it finds focal bright clusters that the other hemisphere does not have, follows them across neighbouring slices, and measures ADC and FLAIR at the same spot. The prompt combines those measurements with a mandatory scan protocol, the built-in anatomy reference and matching literature. The scan protocol makes the AI place every slice at one of seven anatomical levels, from the foramen magnum up to the vertex, recognised by the landmarks a neuroradiologist uses: (1) foramen magnum and medulla, (2) pons and 4th ventricle, (3) midbrain and suprasellar cistern, (4) 3rd ventricle and basal ganglia, (5) bodies of the lateral ventricles, (6) centrum semiovale and (7) high convexity and vertex. This stops it from skipping the posterior fossa or the vertex, and every finding is tied to a level, a structure and a vascular territory. These level numbers are only used internally and do not appear in your report. Claude returns the report, which fills the structured form for you to review, edit and export.</p>
+              <p>Images are parsed and grouped into series, then anonymised before anything else happens. When you request a report, each selected series is enhanced for its sequence and tiled into contact sheets. The lesion pre-screen measures every slice of every loaded sequence. It looks for focal bright spots on DWI, FLAIR, T2, T1 and post-contrast T1, dark spots on SWI, and both on CT, keeping only those that the other hemisphere does not have. It follows them across neighbouring slices, merges findings on different sequences at the same position into one lesion, and measures every sequence there. That signal profile (for example DWI ↑ · ADC ↓ · FLAIR ↑ · T1C ↑ · SWI =) is translated into a list of possible causes for the AI to verify, alongside rough ventricle-size and midline measurements. The prompt combines those measurements with a mandatory scan protocol, the built-in anatomy reference and matching literature. The scan protocol makes the AI place every slice at one of seven anatomical levels, from the foramen magnum up to the vertex, recognised by the landmarks a neuroradiologist uses: (1) foramen magnum and medulla, (2) pons and 4th ventricle, (3) midbrain and suprasellar cistern, (4) 3rd ventricle and basal ganglia, (5) bodies of the lateral ventricles, (6) centrum semiovale and (7) high convexity and vertex. This stops it from skipping the posterior fossa or the vertex, and every finding is tied to a level, a structure and a vascular territory. These level numbers are only used internally and do not appear in your report. Claude returns the report, which fills the structured form for you to review, edit and export.</p>
 
               <h3 class="about-h">Privacy</h3>
               <p>Your API key is kept in this browser's local storage only. DICOM patient tags are removed before images leave your machine, and only anonymised images and text go to the Anthropic API over HTTPS. Burned-in text inside JPG/PNG screenshots cannot be detected automatically, so crop it out before loading.</p>
 
               <h3 class="about-h">Limitations</h3>
-              <p>Research use only: not validated for clinical diagnosis and not CE marked. The lesion pre-screen can miss lesions smaller than about 3 mm or symmetric disease. For JPG/PNG input, left/right assumes the radiological convention and slice order follows the file numbering. Every report must be checked by a radiologist.</p>
+              <p>Research use only: not validated for clinical diagnosis and not CE marked. The lesion pre-screen is rule-based, not a trained model: it can miss lesions smaller than about 3 mm, symmetric or diffuse disease and subtle extra-axial collections, and its ventricle and midline figures are rough estimates. For JPG/PNG input, left/right assumes the radiological convention and slice order follows the file numbering. Every report must be checked by a radiologist.</p>
             </div>
           </div>
           <div class="card">
@@ -3135,6 +3135,16 @@ const ANATOMY_REF={
     'FLAIR hyperintense vessel sign (slow distal flow) supports large-vessel occlusion — report it.',
     'Periventricular caps / bands normal; Fazekas for small-vessel disease.'
   ],
+  general:[
+    'Intra- vs extra-axial: extra-axial signs = CSF cleft, grey-matter buckling, broad dural base / dural tail, displaced cortical vessels, bone change; intra-axial = expands the gyrus/white matter, surrounded by brain.',
+    'Mass effect: sulcal effacement, ventricular compression, midline shift (measure at the septum pellucidum), subfalcine / uncal / tonsillar herniation, trapped ventricle, hydrocephalus.',
+    'Enhancement patterns: solid; thick irregular ring (high-grade glioma, metastasis); thin smooth ring with central restriction (abscess); incomplete ring open toward cortex (demyelination); dural tail (meningioma); leptomeningeal (infection, carcinomatosis); pachymeningeal (intracranial hypotension, post-surgery); gyriform (subacute infarct).',
+    'Haemorrhage age on MRI (T1 / T2): hyperacute iso / bright; acute iso / dark; early subacute bright / dark; late subacute bright / bright; chronic dark / dark rim (haemosiderin). SWI dark at all stages after the hyperacute phase.',
+    'Demyelination (MS): periventricular lesions perpendicular to the ventricles (Dawson fingers), juxtacortical / cortical, infratentorial, spinal cord; corpus callosum undersurface; central vein sign; enhancing + non-enhancing lesions = dissemination in time.',
+    'Small-vessel disease: Fazekas grade, lacunes, microbleeds (deep = hypertensive, lobar = amyloid angiopathy), enlarged perivascular spaces.',
+    'Atrophy / degeneration: global vs focal (medial temporal → Alzheimer, frontotemporal → FTD, midbrain → PSP, pons/cerebellum → MSA); ventricles out of proportion to sulci → normal-pressure hydrocephalus.',
+    'Infection / inflammation: abscess (restricting core, smooth rim), encephalitis (HSV: medial temporal + insula, often asymmetric), ventriculitis (debris, ependymal enhancement), empyema (restricting extra-axial collection).'
+  ],
   ctSigns:[
     'Hyperdense artery sign (MCA, basilar), insular ribbon sign, lentiform obscuration, sulcal effacement, loss of grey–white differentiation.',
     'ASPECTS: 10 regions (C, L, IC, I, M1–M3 at ganglionic level; M4–M6 supraganglionic), subtract 1 per region with early ischaemic change.'
@@ -3147,6 +3157,7 @@ function buildAnatomyContext(mods){
   L.push('## NEUROANATOMY REFERENCE (built-in) — use it to name structures, levels and territories precisely');
   L.push('Axial levels, inferior → superior:');
   R.levels.forEach(l=>L.push('• '+l[0]+'\n   '+l[1]+'\n   '+l[2]+'\n   '+l[3]));
+  L.push('General neuroradiology patterns:\n'+R.general.map(p=>'• '+p).join('\n'));
   L.push('Stroke patterns:\n'+R.patterns.map(p=>'• '+p).join('\n'));
   const has=m=>mods.has(m);
   if(has('DWI')||has('ADC')||has('UNK')) L.push('DWI/ADC mimics and pitfalls:\n'+R.dwiMimics.map(p=>'• '+p).join('\n'));
@@ -3169,37 +3180,41 @@ window.saveAnatPref=function(){
 };
 
 /* ══════════════════════════════════════════════════════════════════════════
-   AI IMAGE ANALYSIS CORE
-   • seriesModalityOf  — DWI / ADC / FLAIR / T1 / T2 / SWI / MRA / CT / UNK
-   • renderForAI       — modality-aware enhancement (works for DICOM + JPG/PNG)
-   • CAD lesion pre-screen — brain mask, robust z-score, connected clusters,
-     contralateral mirror asymmetry, 3D linking, ADC/FLAIR measured at the
-     same anatomical position, landmark-based localisation.
+   AI IMAGE ANALYSIS CORE — general neuroradiology pre-screen
+   • seriesModalityOf  — DWI / ADC / FLAIR / T2 / T1 / T1C / SWI / MRA / CT / UNK
+   • renderForAI       — sequence-aware enhancement (DICOM + JPG/PNG)
+   • CAD pre-screen    — per-sequence bright AND dark detectors, contralateral
+     mirror comparison, 3D linking, cross-sequence lesion merging, full signal
+     profile at every lesion, pattern-based differential hints, global
+     ventricle / midline metrics, landmark-based localisation.
    ══════════════════════════════════════════════════════════════════════════ */
 function seriesModalityOf(sl){
   if(!sl) return 'UNK';
   const d=((sl.seriesDesc||'')+' '+(sl.fname||'')+' '+(sl.imageType||'')+' '+(sl.protocolName||'')).toLowerCase();
-  if(/adc|apparent/.test(d)) return 'ADC';
-  if(/dwi|diff|trace|b1000|b-1000|b800|tracew/.test(d)) return 'DWI';
-  if(/flair|fluid.?att|dark.?fluid/.test(d)) return 'FLAIR';
-  if(/swi|suscep|swan|t2\*|t2star|hemo/.test(d)) return 'SWI';
-  if(/tof|mra|angio/.test(d)) return 'MRA';
-  if(/t1|mprage|bravo|spgr|tfe|vibe/.test(d)) return 'T1';
-  if(/t2|tse|fse|haste/.test(d)) return 'T2';
-  if(sl.isCT) return 'CT';
+  const has=re=>re.test(d);
+  if(sl.isCT&&!sl.raster) return 'CT';
+  if(has(/adc|apparent/)) return 'ADC';
+  if(has(/dwi|diff|trace|b1000|b-1000|b800|tracew/)) return 'DWI';
+  if(has(/flair|fluid.?att|dark.?fluid/)) return 'FLAIR';
+  if(has(/swi|suscep|swan|t2\*|t2star|hemo|(^|[^a-z])gre([^a-z]|$)/)) return 'SWI';
+  if(has(/tof|mra|angio/)) return 'MRA';
+  if(has(/t1c|t1ce|t1\+|post.?contrast|post.?gad|(t1|mprage|spgr|bravo|vibe|tfe).*(post|gad|gd|\+c|contrast|(^|[^a-z])ce([^a-z]|$))/)) return 'T1C';
+  if(has(/t1|mprage|bravo|spgr|tfe|vibe/)) return 'T1';
+  if(has(/t2|tse|fse|haste/)) return 'T2';
+  if(sl.isCT||has(/(^|[^a-z0-9])ct([^a-z]|$)|ncct/)) return 'CT';
   return 'UNK';
 }
 
-// Percentile stretch per modality (lo, hi). Anatomy stays visible for landmarks,
-// pathological bright foci saturate toward white.
+// Percentile stretch per sequence (lo, hi): anatomy stays visible for landmarks,
+// pathological foci saturate.
 function _modPct(mod){
   if(mod==='DWI') return [8,99.6];
-  if(mod==='FLAIR') return [1,99.4];
-  if(mod==='ADC') return [1,99.5];
+  if(mod==='FLAIR'||mod==='T2') return [1,99.4];
+  if(mod==='SWI') return [0.4,99.0];
   return [0.5,99.5];
 }
 
-/** Render a slice at native resolution with modality-aware windowing + CLAHE. */
+/** Render a slice at native resolution with sequence-aware windowing + CLAHE. */
 function renderForAI(sl, mod){
   mod=mod||seriesModalityOf(sl);
   const tmp=document.createElement('canvas');
@@ -3247,7 +3262,6 @@ function sliceGrid(sl){
     for(let i=0;i<w*h;i++) v[i]=d[i*4]*0.299+d[i*4+1]*0.587+d[i*4+2]*0.114;
   } else {
     const vals=computeSliceHistogram(sl); if(!vals) return null;
-    // box-average downsample (reduces noise vs nearest neighbour)
     const fx=sl.cols/w, fy=sl.rows/h;
     for(let y=0;y<h;y++){
       const y0=Math.floor(y*fy), y1=Math.max(y0+1,Math.floor((y+1)*fy));
@@ -3263,7 +3277,7 @@ function sliceGrid(sl){
   return sl._grid;
 }
 
-/* ── Brain model: smoothed image, mask, ellipse frame, robust stats ── */
+/* ── Brain model: smoothed image, head mask, ellipse frame, robust stats ── */
 function brainModel(sl){
   if(sl._bm!==undefined) return sl._bm;
   sl._bm=null;
@@ -3279,7 +3293,7 @@ function brainModel(sl){
   let mn=Infinity,mx=-Infinity;
   for(let i=0;i<n;i++){if(s[i]<mn)mn=s[i];if(s[i]>mx)mx=s[i];}
   if(!(mx-mn>1e-6)) return null;
-  // Otsu threshold (air vs tissue)
+  // Otsu (air vs tissue)
   const B=128,hist=new Float64Array(B);
   for(let i=0;i<n;i++) hist[Math.min(B-1,Math.floor((s[i]-mn)/(mx-mn)*B))]++;
   let tot=0;for(let i=0;i<B;i++)tot+=i*hist[i];
@@ -3288,11 +3302,9 @@ function brainModel(sl){
     const mB=sB/wB,mF=(tot-sB)/wF,bt=wB*wF*(mB-mF)*(mB-mF);if(bt>best){best=bt;tb=i;}}
   const thr=mn+(tb+0.5)/B*(mx-mn)*0.6;
   const mask=new Uint8Array(n);
-  let cnt=0,sx=0,sy=0;
-  for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=y*w+x;if(s[i]>thr){mask[i]=1;cnt++;sx+=x;sy+=y;}}
+  let cnt=0;
+  for(let i=0;i<n;i++) if(s[i]>thr){mask[i]=1;cnt++;}
   if(cnt<n*0.03) return null;
-  const cx=sx/cnt, cy=sy/cnt;
-  // per-row/column extents → robust bbox (2nd–98th percentile of mask coords)
   const xs=[],ys=[];
   for(let y=0;y<h;y++)for(let x=0;x<w;x++)if(mask[y*w+x]){xs.push(x);ys.push(y);}
   xs.sort((a,b)=>a-b);ys.sort((a,b)=>a-b);
@@ -3300,13 +3312,14 @@ function brainModel(sl){
   const by0=ys[Math.floor(ys.length*0.01)],by1=ys[Math.floor(ys.length*0.99)];
   const ax=Math.max(4,(bx1-bx0)/2), ay=Math.max(4,(by1-by0)/2);
   const ecx=(bx0+bx1)/2, ecy=(by0+by1)/2;
-  // interior = inside mask AND inside 0.84 × bounding ellipse (excludes skull, scalp, rim artefact)
+  // interior = inside 0.84 × bounding ellipse (excludes skull, scalp, rim artefact).
+  // CSF/dark tissue inside the ellipse is kept so dark lesions & ventricles are visible.
   const interior=new Uint8Array(n), rN=new Float32Array(n);
   const tissue=[];
   for(let y=0;y<h;y++)for(let x=0;x<w;x++){
     const i=y*w+x, r=Math.sqrt(((x-ecx)/ax)**2+((y-ecy)/ay)**2);
     rN[i]=r;
-    if(mask[i]&&r<0.84){interior[i]=1;tissue.push(s[i]);}
+    if(r<0.84){interior[i]=1; if(mask[i]) tissue.push(s[i]);}
   }
   if(tissue.length<50) return null;
   tissue.sort((a,b)=>a-b);
@@ -3314,16 +3327,17 @@ function brainModel(sl){
   const dev=tissue.map(t=>Math.abs(t-med)).sort((a,b)=>a-b);
   let sig=1.4826*dev[dev.length>>1];
   sig=Math.max(sig,(mx-mn)*0.01);
-  // central CSF (ventricles) — dark pixels near centre
-  let cen=0,dark=0;
-  for(let i=0;i<n;i++) if(mask[i]&&rN[i]<0.45){cen++; if(s[i]<med-2.5*sig) dark++;}
-  const bm={w,h,s,mask,interior,rN,cx,cy,ecx,ecy,ax,ay,bx0,bx1,by0,by1,med,sig,
-    area:cnt, interiorCount:tissue.length, ventFrac:cen?dark/cen:0};
+  // central CSF fractions (dark-CSF sequences and bright-CSF sequences)
+  let cen=0,dark=0,bright=0;
+  for(let i=0;i<n;i++) if(rN[i]<0.45){cen++; if(s[i]<med-2.5*sig) dark++; else if(s[i]>med+2.5*sig) bright++;}
+  const bm={w,h,s,mask,interior,rN,ecx,ecy,ax,ay,bx0,bx1,by0,by1,med,sig,
+    area:cnt, interiorCount:tissue.length, ventDark:cen?dark/cen:0, ventBright:cen?bright/cen:0};
   sl._bm=bm;
   return bm;
 }
+const _csfBright=m=>m==='T2'||m==='ADC';
 
-/** Mean intensity in a small disc at brain-frame coords (u,v ∈ [0,1]), plus its mirror. */
+/** Signal in a small disc at brain-frame coords (u,v ∈ [0,1]) vs its contralateral mirror. */
 function regionRatioAt(sl,u,v,rad){
   const bm=brainModel(sl); if(!bm) return null;
   const {w,h,s,bx0,bx1,by0,by1,ecx}=bm;
@@ -3336,131 +3350,149 @@ function regionRatioAt(sl,u,v,rad){
         if((x-X)**2+(y-Y)**2<=rr*rr){a+=s[y*w+x];c++;}}}
     return c?a/c:NaN;}
   const a=meanAt(px,py), b=meanAt(mxp,py);
-  if(!isFinite(a)||!isFinite(b)||b<=0) return null;
-  return {val:a,mirror:b,ratio:a/b,z:(a-bm.med)/bm.sig};
+  if(!isFinite(a)||!isFinite(b)) return null;
+  return {val:a,mirror:b,ratio:b>0?a/b:NaN,z:(a-bm.med)/bm.sig,dz:(a-b)/bm.sig};
 }
 
-/** Candidate bright clusters on one slice. */
-function sliceCandidates(sl,mod){
+/* Detector configuration per sequence: polarity (+1 bright, −1 dark), z threshold,
+   minimum contralateral difference (σ). ADC / MRA are companion-only. */
+const CAD_CFG={
+  DWI:  {pol:[+1],    z:3.3, minD:1.2},
+  FLAIR:{pol:[+1],    z:3.6, minD:1.2},
+  T2:   {pol:[+1],    z:3.8, minD:1.6},
+  T1:   {pol:[+1],    z:3.8, minD:1.4},
+  T1C:  {pol:[+1],    z:3.5, minD:1.3},
+  SWI:  {pol:[-1],    z:3.4, minD:1.2, vein:true},
+  CT:   {pol:[+1,-1], z:3.3, minD:1.2},
+  UNK:  {pol:[+1],    z:3.5, minD:1.2},
+  ADC:  {pol:[]}, MRA:{pol:[]}
+};
+
+/** Candidate clusters on one slice for one polarity. */
+function sliceCandidates(sl,mod,pol,cfg){
   const bm=brainModel(sl); if(!bm) return [];
   const {w,h,s,interior,med,sig,ecx,bx0,bx1,by0,by1,interiorCount,rN}=bm;
-  const zThr=mod==='FLAIR'?3.8:3.3;
-  const n=w*h, lab=new Int32Array(n);
-  const out=[];
+  const zThr=cfg.z, n=w*h, lab=new Int32Array(n), out=[];
+  const zf=i=>pol*(s[i]-med)/sig;
   let L=0;
   for(let i=0;i<n;i++){
-    if(lab[i]||!interior[i]||(s[i]-med)/sig<zThr) continue;
+    if(lab[i]||!interior[i]||zf(i)<zThr) continue;
     L++; const st=[i]; lab[i]=L;
-    let area=0,sz=0,pz=0,sx=0,sy=0,x0=w,x1=0,y0=h,y1=0,sumV=0,rsum=0;
+    let area=0,sz=0,pz=0,sx=0,sy=0,sxx=0,syy=0,sxy=0,x0=w,x1=0,y0=h,y1=0,sumV=0,rsum=0;
     const pix=[];
     while(st.length){
-      const p=st.pop(); const x=p%w, y=(p/w)|0;
-      const z=(s[p]-med)/sig;
-      area++;sz+=z;if(z>pz)pz=z;sx+=x;sy+=y;sumV+=s[p];rsum+=rN[p];pix.push(p);
+      const p=st.pop(); const x=p%w, y=(p/w)|0, z=zf(p);
+      area++;sz+=z;if(z>pz)pz=z;sx+=x;sy+=y;sxx+=x*x;syy+=y*y;sxy+=x*y;sumV+=s[p];rsum+=rN[p];pix.push(p);
       if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;
-      const nb=[p-1,p+1,p-w,p+w];
-      for(const q of nb){
+      for(const q of [p-1,p+1,p-w,p+w]){
         if(q<0||q>=n) continue;
         if((q===p-1&&x===0)||(q===p+1&&x===w-1)) continue;
-        if(!lab[q]&&interior[q]&&(s[q]-med)/sig>=zThr-0.8){lab[q]=L;st.push(q);}
+        if(!lab[q]&&interior[q]&&zf(q)>=zThr-0.8){lab[q]=L;st.push(q);}
       }
     }
     if(area<3||area>interiorCount*0.22) continue;
-    // mirror comparison across brain midline
     let ma=0,mc=0;
     for(const p of pix){const x=p%w,y=(p/w)|0;const mx=Math.round(2*ecx-x);if(mx<0||mx>=w)continue;ma+=s[y*w+mx];mc++;}
     const meanV=sumV/area, mirrorV=mc?ma/mc:med;
-    const asym=meanV/Math.max(mirrorV,1e-6);
-    if(asym<1.06) continue;              // symmetric → physiological / artefact
-    const ccx=sx/area, ccy=sy/area;
+    const dz=pol*(meanV-mirrorV)/sig;               // contralateral difference in σ
+    if(dz<cfg.minD) continue;                        // symmetric → physiological / artefact
+    const ccx=sx/area, ccy=sy/area, rMean=rsum/area;
+    // shape: elongation from second moments (veins on SWI are linear)
+    const cxx=sxx/area-ccx*ccx, cyy=syy/area-ccy*ccy, cxy=sxy/area-ccx*ccy;
+    const tr=(cxx+cyy)/2, det=cxx*cyy-cxy*cxy, disc=Math.sqrt(Math.max(0,tr*tr-det));
+    const elong=Math.sqrt((tr+disc)/Math.max(tr-disc,0.05));
+    if(cfg.vein&&elong>3.2&&area>6) continue;
+    // dark central blobs on CT/T1 are almost always ventricles
+    if(pol<0&&(mod==='CT'||mod==='T1')&&rMean<0.38) continue;
     out.push({
-      area, meanZ:sz/area, peakZ:pz, asym,
+      pol, area, meanZ:sz/area, peakZ:pz, dz, elong, meanVal:meanV,
+      asym:(meanV>0&&mirrorV>0)?(pol>0?meanV/mirrorV:mirrorV/meanV):null,
       u:(ccx-bx0)/Math.max(1,bx1-bx0), v:(ccy-by0)/Math.max(1,by1-by0),
       ucx:(ecx-bx0)/Math.max(1,bx1-bx0),
-      bbox:[x0/w,y0/h,(x1+1)/w,(y1+1)/h],      // normalised to image
-      areaPct:100*area/interiorCount, rMean:rsum/area,
-      score:(sz/area)*Math.sqrt(area)*Math.min(asym,3)
+      bbox:[x0/w,y0/h,(x1+1)/w,(y1+1)/h],
+      areaPct:100*area/interiorCount, rMean,
+      score:(sz/area)*Math.sqrt(area)*Math.min(1+dz/3,3)
     });
   }
   return out;
 }
 
 /** Landmark-based localisation text for a candidate. */
-function cadLocation(c, bm, relArea){
+function cadLocation(c, bm, relArea, mod){
   const side=c.u<c.ucx?'image-LEFT (= patient RIGHT, radiological convention)':'image-RIGHT (= patient LEFT, radiological convention)';
-  const lat=Math.abs(c.u-c.ucx)/0.5;    // 0 = midline, 1 = cortex
+  const lat=Math.abs(c.u-c.ucx)/0.5;
   let depth;
   if(lat<0.18) depth='midline/paramedian (corpus callosum, septum, medial structures, falx)';
   else if(lat<0.45) depth='deep (periventricular / basal ganglia / thalamus / internal capsule / corona radiata, depending on level)';
   else if(lat<0.72) depth='subcortical white matter';
-  else depth='cortical / juxtacortical';
+  else depth='cortical / juxtacortical — also consider extra-axial (subdural, dural-based, leptomeningeal)';
   const ap=c.v<0.33?'anterior third (frontal)':c.v<0.66?'middle third (fronto-parietal / insular / temporal)':'posterior third (parietal / occipital)';
+  const vent=_csfBright(mod)?bm.ventBright:bm.ventDark;
   let level;
-  if(relArea<0.45) level='small brain cross-section → posterior fossa / skull base OR high vertex (susceptibility artefact zone at skull base — verify)';
-  else if(bm.ventFrac>0.04) level='ventricular level (lateral ventricles visible → basal ganglia / thalami / corona radiata)';
-  else level='non-ventricular supratentorial level (centrum semiovale / high convexity, or temporal/midbrain level)';
+  if(relArea<0.45) level='small brain cross-section → posterior fossa / skull base OR high vertex (artefact-prone at skull base — verify)';
+  else if(vent>0.04) level='ventricular level (lateral ventricles visible → basal ganglia / thalami / corona radiata)';
+  else level='non-ventricular supratentorial level (centrum semiovale / high convexity, or temporal / midbrain level)';
   let terr;
-  if(lat<0.3&&c.v<0.4) terr='ACA (or ACA-MCA watershed)';
-  else if(c.v>0.72) terr='PCA (or MCA-PCA watershed)';
-  else if(lat>=0.3&&lat<0.62&&relArea>=0.45) terr='MCA deep (lenticulostriate) or internal border-zone (corona radiata/centrum semiovale)';
+  if(lat<0.3&&c.v<0.4) terr='ACA (or ACA–MCA watershed)';
+  else if(c.v>0.72) terr='PCA (or MCA–PCA watershed)';
+  else if(lat>=0.3&&lat<0.62&&relArea>=0.45) terr='MCA deep (lenticulostriate) or internal border-zone';
   else terr='MCA superficial (cortical branch)';
-  if(relArea<0.45) terr+=' — if infratentorial: posterior circulation (PICA/AICA/SCA/basilar perforators)';
+  if(relArea<0.45) terr+=' — if infratentorial: posterior circulation (PICA / AICA / SCA / basilar perforators)';
   return {side,depth,ap,level,terr};
 }
 
-/** Run CAD on a series pool. Returns ranked 3D clusters. */
-function detectSeriesLesions(pool,mod){
-  const all=[];
+/** Run one sequence's detectors over a series pool; returns ranked 3D clusters. */
+function detectSeriesLesions(pool,mod,cfg){
+  cfg=cfg||CAD_CFG[mod]||CAD_CFG.UNK;
+  const out=[];
   let maxArea=1;
   pool.forEach(sl=>{const bm=brainModel(sl); if(bm&&bm.area>maxArea) maxArea=bm.area;});
-  pool.forEach((sl,si)=>{
-    const bm=brainModel(sl); if(!bm) return;
-    const rel=bm.area/maxArea;
-    sliceCandidates(sl,mod).forEach(c=>{
-      c.si=si; c.relArea=rel;
-      if(rel<0.45) c.score*=0.55;          // skull base / vertex: artefact-prone
-      if(c.rMean>0.74) c.score*=0.75;      // touching brain rim
-      all.push(c);
+  (cfg.pol||[]).forEach(pol=>{
+    const all=[];
+    pool.forEach((sl,si)=>{
+      const bm=brainModel(sl); if(!bm) return;
+      const rel=bm.area/maxArea;
+      sliceCandidates(sl,mod,pol,cfg).forEach(c=>{
+        c.si=si; c.relArea=rel;
+        if(rel<0.45) c.score*=0.55;
+        if(c.rMean>0.74) c.score*=0.75;
+        all.push(c);
+      });
+    });
+    const par=all.map((_,i)=>i);
+    const f=i=>par[i]===i?i:(par[i]=f(par[i]));
+    for(let i=0;i<all.length;i++)for(let j=i+1;j<all.length;j++){
+      const a=all[i],b=all[j];
+      if(Math.abs(a.si-b.si)===1&&Math.hypot(a.u-b.u,a.v-b.v)<0.09) par[f(i)]=f(j);
+    }
+    const groups={};
+    all.forEach((c,i)=>{const r=f(i);(groups[r]=groups[r]||[]).push(c);});
+    Object.values(groups).forEach(m=>{
+      m.sort((a,b)=>b.score-a.score);
+      const sis=m.map(c=>c.si), span=new Set(sis).size;
+      const cl={best:m[0],members:m,pol,siMin:Math.min(...sis),siMax:Math.max(...sis),span,
+        score:m.reduce((s,c)=>s+c.score,0)*(span>1?1.25:1)};
+      if(cl.best.peakZ>=4.2||span>1) out.push(cl);
     });
   });
-  // 3D linking (union-find over adjacent slices with nearby centroids)
-  const par=all.map((_,i)=>i);
-  const f=i=>par[i]===i?i:(par[i]=f(par[i]));
-  for(let i=0;i<all.length;i++)for(let j=i+1;j<all.length;j++){
-    const a=all[i],b=all[j];
-    if(Math.abs(a.si-b.si)===1&&Math.hypot(a.u-b.u,a.v-b.v)<0.09) par[f(i)]=f(j);
-  }
-  const groups={};
-  all.forEach((c,i)=>{const r=f(i);(groups[r]=groups[r]||[]).push(c);});
-  const clusters=Object.values(groups).map(m=>{
-    m.sort((a,b)=>b.score-a.score);
-    const best=m[0];
-    const sis=m.map(c=>c.si);
-    const span=new Set(sis).size;
-    return {best, members:m, siMin:Math.min(...sis), siMax:Math.max(...sis), span,
-      score:m.reduce((s,c)=>s+c.score,0)*(span>1?1.25:1)};
-  });
-  clusters.sort((a,b)=>b.score-a.score);
-  return clusters.filter(c=>c.best.peakZ>=4.2||c.span>1).slice(0,4);
+  out.sort((a,b)=>b.score-a.score);
+  return out.slice(0,5);
 }
 
-/** Map an index in one series onto another of different length. */
 function _relIdx(si,nFrom,nTo){return nTo<=1?0:Math.round(si*(nTo-1)/Math.max(1,nFrom-1));}
 
-/** Crop a canvas around brain-frame (u,v) of a slice; returns square canvas `px`. */
+/** Crop around brain-frame (u,v) of a slice; square canvas of `px`. */
 function _cropAt(sl,mod,u,v,halfFrac,px,mirror){
   const bm=brainModel(sl); const full=renderForAI(sl,mod);
   const out=document.createElement('canvas');out.width=px;out.height=px;
   const oc=out.getContext('2d');oc.fillStyle='#000';oc.fillRect(0,0,px,px);
-  if(!bm) {oc.drawImage(full,0,0,px,px);return out;}
-  const g={w:bm.w,h:bm.h};
-  const kx=full.width/g.w, ky=full.height/g.h;
+  if(!bm){oc.drawImage(full,0,0,px,px);return out;}
+  const kx=full.width/bm.w, ky=full.height/bm.h;
   let gx=bm.bx0+u*(bm.bx1-bm.bx0), gy=bm.by0+v*(bm.by1-bm.by0);
   if(mirror) gx=2*bm.ecx-gx;
   const half=halfFrac*(bm.bx1-bm.bx0);
-  const sx=(gx-half)*kx, sy=(gy-half)*ky, sw=2*half*kx, sh=2*half*ky;
   oc.imageSmoothingQuality='high';
-  oc.drawImage(full,sx,sy,sw,sh,0,0,px,px);
+  oc.drawImage(full,(gx-half)*kx,(gy-half)*ky,2*half*kx,2*half*ky,0,0,px,px);
   return out;
 }
 
@@ -3471,81 +3503,155 @@ function _lbl(ctx,text,x,y,col){
   ctx.fillStyle=col||'#ff0';ctx.fillText(text,x+4,y+14);
 }
 
+/** Map of sequence → '↑' / '↓' / '=' to differential hints (non-diagnostic). */
+function cadPatternHints(P){
+  const up=m=>P[m]==='↑', dn=m=>P[m]==='↓', H=[];
+  if(up('DWI')&&dn('ADC'))
+    H.push('RESTRICTED DIFFUSION → acute infarct, abscess (central), hypercellular tumour (lymphoma, medulloblastoma, some metastases), CJD, seizure-related change, acute demyelination, DAI'+
+      (up('T1C')?'; enhancing → favour abscess / tumour / subacute infarct (judge rim vs solid)':'')+
+      (P.FLAIR?(up('FLAIR')?'; FLAIR+ (if infarct: likely > 4.5–6 h)':'; FLAIR− (if infarct: DWI–FLAIR mismatch, likely < 4.5 h)'):''));
+  else if(up('DWI')&&P.ADC&&!dn('ADC')) H.push('DWI bright without low ADC → T2 shine-through or vasogenic oedema, not acute restriction');
+  else if(up('DWI')&&!P.ADC) H.push('DWI hyperintensity — no ADC loaded, cannot separate restriction from shine-through');
+  if(up('ADC')&&(up('FLAIR')||up('T2'))&&!up('DWI'))
+    H.push('ADC HIGH with T2/FLAIR signal → facilitated diffusion: vasogenic oedema (tumour, abscess wall, PRES), gliosis, demyelination, chronic infarct');
+  if(dn('SWI')) H.push('SUSCEPTIBILITY (SWI dark) → microbleed, haemorrhage, calcification, cavernoma, thrombosed vessel, mineralisation, metal'+
+      (up('T1')?'; with T1 bright → subacute blood (methaemoglobin)':'')+(up('CT')?'; CT dense → haemorrhage vs calcification by HU':''));
+  if(up('T1')&&!dn('SWI')) H.push('INTRINSIC T1 HYPERINTENSITY → subacute blood, fat (dermoid, lipoma), melanin, high protein (colloid cyst), mineralisation (Ca, Mn), or gadolinium');
+  if(up('T1C')) H.push('ENHANCEMENT → tumour (glioma, metastasis, lymphoma, meningioma if dural-based), abscess, active demyelination, subacute infarct, inflammation/infection — describe pattern (solid, ring, incomplete ring, dural tail, leptomeningeal, gyriform)');
+  if((up('FLAIR')||up('T2'))&&!up('DWI')&&!up('T1C')&&!dn('SWI'))
+    H.push('T2/FLAIR HYPERINTENSITY without restriction or enhancement → gliosis / chronic infarct, demyelination, small-vessel disease, vasogenic oedema, low-grade tumour, inflammation, PRES');
+  if(up('CT')) H.push('CT HYPERDENSITY → acute haemorrhage (≈ 50–90 HU), calcification (> ~120 HU), hyperdense vessel, hypercellular tumour');
+  if(dn('CT')) H.push('CT HYPODENSITY → infarct / oedema, demyelination, tumour, abscess, chronic encephalomalacia');
+  return H;
+}
+
+/** Crude whole-brain metrics: ventricle size, L/R ventricular asymmetry, midline offset. */
+function cadGlobalMetrics(pools){
+  const pref=['FLAIR','T1','CT','DWI','T1C','T2','UNK'];
+  const p=pref.map(m=>pools.find(x=>x.mod===m)).find(Boolean);
+  if(!p) return null;
+  const bright=_csfBright(p.mod);
+  let best=null;
+  p.pool.forEach((sl,si)=>{
+    const bm=brainModel(sl); if(!bm) return;
+    const {w,h,s,rN,med,sig,ecx,bx0,bx1}=bm;
+    let L=0,R=0,sx=0,cnt=0,cen=0;
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=y*w+x; if(rN[i]>=0.45) continue; cen++;
+      const csf=bright?s[i]>med+2.5*sig:s[i]<med-2.5*sig;
+      if(csf){cnt++;sx+=x;if(x<ecx)L++;else R++;}}
+    if(cnt&&(!best||cnt>best.cnt)) best={si,cnt,L,R,frac:cnt/cen,off:(sx/cnt-ecx)/Math.max(1,bx1-bx0)};
+  });
+  if(!best||best.cnt<8) return null;
+  return {series:p,...best,lr:best.L/Math.max(1,best.R)};
+}
+
 /**
  * Full CAD pass over the AI-selected series.
- * Returns {text, images:[{b64,label}]}.
+ * Returns {text, images:[{b64,label}], count}.
  */
 function runLesionCAD(seriesKeys){
   const pools=seriesKeys.map(k=>({key:k,pool:seriesGroups[k]||[]})).filter(p=>p.pool.length);
   pools.forEach(p=>{p.mod=seriesModalityOf(p.pool[0]);p.name=p.pool[0].seriesDesc||p.key;});
-  const by=m=>pools.filter(p=>p.mod===m);
-  let targets=by('DWI');
-  if(!targets.length) targets=pools.filter(p=>['FLAIR','T2','UNK','CT'].includes(p.mod));
-  const adc=by('ADC')[0], flair=by('FLAIR')[0];
-  const lines=['## AUTOMATED LESION PRE-SCREEN (CAD) — computed on pixel data before you saw the images',
-    'Method: intracranial mask → robust z-score of every pixel vs. brain median (MAD) → connected bright clusters → contralateral mirror asymmetry → 3D linking over adjacent images → ADC and FLAIR measured at the identical brain-frame position.',
-    'Series detected: '+pools.map(p=>`${p.mod} "${p.name}" (${p.pool.length} img)`).join(' | ')];
-  const images=[];
-  let nC=0;
-  targets.forEach(t=>{
-    const cl=detectSeriesLesions(t.pool,t.mod==='UNK'?'DWI':t.mod);
-    if(!cl.length){lines.push(`• ${t.mod} "${t.name}": no focal asymmetric hyperintense cluster above threshold (sensitivity limited for lesions < ~3 mm or bilateral-symmetric disease — still check visually).`);return;}
-    cl.slice(0,3).forEach(c=>{
-      nC++; const id='CAD-'+nC; const b=c.best;
-      const sl=t.pool[b.si]; const bm=brainModel(sl);
-      const loc=cadLocation(b,bm,b.relArea);
-      const rad=Math.max(0.025,Math.sqrt(b.area/Math.PI)/Math.max(1,bm.bx1-bm.bx0));
-      let line=`${id}: ${t.mod} "${t.name}" image #${b.si+1}`+(c.span>1?` (spans #${c.siMin+1}–#${c.siMax+1}, ${c.span} images)`:' (single image)')+
-        `. Peak z=${b.peakZ.toFixed(1)}, mean z=${b.meanZ.toFixed(1)}, size ≈${b.areaPct.toFixed(1)}% of intracranial cross-section, contralateral asymmetry ×${b.asym.toFixed(2)}.`+
-        `\n   Location: ${loc.side}; ${loc.depth}; ${loc.ap}; ${loc.level}.\n   Suggested vascular territory (verify on landmarks): ${loc.terr}.`;
-      let adcR=null, flR=null;
-      if(adc&&t.mod==='DWI'){
-        const ai=_relIdx(b.si,t.pool.length,adc.pool.length);
-        adcR=regionRatioAt(adc.pool[ai],b.u,b.v,rad);
-        if(adcR) line+=`\n   ADC "${adc.name}" image #${ai+1}: lesion/mirror ratio ${adcR.ratio.toFixed(2)} → `+(adcR.ratio<=0.85?'LOW ADC = TRUE RESTRICTED DIFFUSION':adcR.ratio>=1.15?'HIGH ADC = T2 shine-through / vasogenic (not acute ischaemia)':'indeterminate (near-normal ADC)')+'.';
-      }
-      if(flair&&t!==flair){
-        const fi=_relIdx(b.si,t.pool.length,flair.pool.length);
-        flR=regionRatioAt(flair.pool[fi],b.u,b.v,rad);
-        if(flR) line+=`\n   FLAIR "${flair.name}" image #${fi+1}: lesion/mirror ratio ${flR.ratio.toFixed(2)} → `+(flR.ratio>=1.12?'FLAIR HYPERINTENSE':'no clear FLAIR change (DWI–FLAIR mismatch if DWI positive)')+'.';
-      }
-      if(t.mod==='DWI'&&adcR&&adcR.ratio<=0.85){
-        line+='\n   CAD interpretation: pattern of ACUTE ISCHAEMIC LESION'+(flR?(flR.ratio>=1.12?' (FLAIR+ → likely >4.5–6 h)':' (FLAIR− → DWI–FLAIR mismatch, likely <4.5 h — thrombolysis window relevant)'):'')+'.';
-      } else if(t.mod==='DWI'&&!adc){
-        line+='\n   CAD interpretation: focal DWI hyperintensity — no ADC series loaded to confirm true restriction.';
-      }
-      lines.push(line);
+  const ORDER=['DWI','ADC','FLAIR','T2','T1','T1C','SWI','CT','UNK','MRA'];
+  pools.sort((a,b)=>ORDER.indexOf(a.mod)-ORDER.indexOf(b.mod));
+  const lines=['## AUTOMATED LESION PRE-SCREEN (CAD) — measured on pixel data before you saw the images',
+    'Method: intracranial mask → robust z-score of every pixel vs. the brain median (MAD) → connected clusters that are BRIGHT (DWI, FLAIR, T2, T1, T1 post-contrast, CT) or DARK (SWI, CT) → contralateral mirror difference → 3D linking over adjacent images → clusters on different sequences at the same position merged into one lesion → every loaded sequence measured at that position (signal profile).',
+    'Series analysed: '+pools.map(p=>`${p.mod} "${p.name}" (${p.pool.length} img)`).join(' | ')];
 
-      // Image A: full slice with red box
-      const full=renderForAI(sl,t.mod==='UNK'?'DWI':t.mod);
-      const S=Math.min(1,640/Math.max(full.width,full.height));
-      const A=document.createElement('canvas');A.width=Math.round(full.width*S);A.height=Math.round(full.height*S);
-      const ac=A.getContext('2d');ac.drawImage(full,0,0,A.width,A.height);
-      const [x0,y0,x1,y1]=b.bbox, pad=10;
-      ac.strokeStyle='#ff2d2d';ac.lineWidth=2;
-      ac.strokeRect(x0*A.width-pad,y0*A.height-pad,(x1-x0)*A.width+2*pad,(y1-y0)*A.height+2*pad);
-      _lbl(ac,`${id} ${t.mod} #${b.si+1} (red box = CAD candidate, look INSIDE it)`,2,2,'#ff6');
-      images.push({b64:A.toDataURL('image/png').split(',')[1],label:id+' FULL'});
-
-      // Image B: comparison grid — rows: series, cols: lesion | contralateral mirror (2.5× zoom)
-      const rows=[{p:t,si:b.si}];
-      if(adc&&t.mod==='DWI') rows.push({p:adc,si:_relIdx(b.si,t.pool.length,adc.pool.length)});
-      if(flair&&t!==flair) rows.push({p:flair,si:_relIdx(b.si,t.pool.length,flair.pool.length)});
-      const C=256, G=document.createElement('canvas');G.width=2*C+6;G.height=rows.length*(C+6);
-      const gc=G.getContext('2d');gc.fillStyle='#222';gc.fillRect(0,0,G.width,G.height);
-      rows.forEach((r,ri)=>{
-        const m=r.p.mod==='UNK'?'DWI':r.p.mod;
-        const s2=r.p.pool[r.si];
-        gc.drawImage(_cropAt(s2,m,b.u,b.v,0.2,C,false),0,ri*(C+6));
-        gc.drawImage(_cropAt(s2,m,b.u,b.v,0.2,C,true),C+6,ri*(C+6));
-        _lbl(gc,`${id} ${r.p.mod} #${r.si+1} LESION SIDE`,2,ri*(C+6)+2,'#ff6');
-        _lbl(gc,`${r.p.mod} MIRROR (contralateral)`,C+8,ri*(C+6)+2,'#0ff');
-      });
-      images.push({b64:G.toDataURL('image/png').split(',')[1],label:id+' COMPARE'});
-    });
+  // 1. detect on every sequence
+  const finds=[];
+  pools.forEach(p=>{
+    const cfg=CAD_CFG[p.mod]||CAD_CFG.UNK;
+    if(!cfg.pol||!cfg.pol.length) return;
+    const cl=detectSeriesLesions(p.pool,p.mod,cfg);
+    if(!cl.length) lines.push(`• ${p.mod} "${p.name}": no focal asymmetric ${cfg.pol.length>1?'bright or dark':cfg.pol[0]>0?'bright':'dark'} cluster above threshold.`);
+    cl.forEach(c=>finds.push({...c,p}));
   });
-  if(nC) lines.push(`Images supplied: for each CAD-n a "FULL" image (red box) and a "COMPARE" zoom grid (rows = ${['DWI/ADC/FLAIR where available'].join('')}; left = lesion side, right = contralateral mirror at the same position).`,
-    'RULES FOR CAD CANDIDATES: You MUST address EVERY CAD-n explicitly in FINDINGS: either CONFIRM it (describe it using anatomical landmarks, side, structure, level, vascular territory, image #) or REJECT it naming the specific mimic (skull-base / sinus susceptibility artefact, T2 shine-through, choroid plexus, CSF flow, motion, partial volume of cortex/bone). A candidate with asymmetry ≥ ×1.3, peak z ≥ 5 AND low ADC (ratio ≤ 0.85) must be reported as an acute infarct unless you give a concrete reason; never write "no acute infarct" while such a candidate stands unrefuted.');
+  // 2. merge across sequences (same relative slice position + same brain-frame location)
+  finds.sort((a,b)=>b.score-a.score);
+  const lesions=[];
+  finds.forEach(f=>{
+    const rf=f.best.si/Math.max(1,f.p.pool.length-1);
+    const hit=lesions.find(L=>{
+      const g=L.primary, rg=g.best.si/Math.max(1,g.p.pool.length-1);
+      const tol=1.6/Math.max(2,Math.min(f.p.pool.length,g.p.pool.length));
+      return Math.abs(rf-rg)<=tol+0.02&&Math.hypot(f.best.u-g.best.u,f.best.v-g.best.v)<0.11;
+    });
+    if(hit) hit.dets.push(f); else lesions.push({primary:f,dets:[f]});
+  });
+  lesions.forEach(L=>{const n=new Set(L.dets.map(d=>d.p.key)).size; L.score=L.primary.score*(1+0.35*(n-1));});
+  lesions.sort((a,b)=>b.score-a.score);
+  const top=lesions.slice(0,6);
+
+  const images=[]; let nC=0;
+  top.forEach(L=>{
+    nC++; const id='CAD-'+nC; const P0=L.primary, b=P0.best, t=P0.p;
+    const sl=t.pool[b.si], bm=brainModel(sl);
+    const loc=cadLocation(b,bm,b.relArea,t.mod);
+    const rad=Math.max(0.025,Math.sqrt(b.area/Math.PI)/Math.max(1,bm.bx1-bm.bx0));
+    const detTxt=L.dets.map(d=>`${d.p.mod} ${d.pol>0?'↑':'↓'}`).filter((x,i,a)=>a.indexOf(x)===i).join(', ');
+    let line=`${id}: detected on ${detTxt} · primary ${t.mod} "${t.name}" image #${b.si+1}`+
+      (P0.span>1?` (spans #${P0.siMin+1}–#${P0.siMax+1}, ${P0.span} images)`:' (single image)')+
+      `. ${b.pol>0?'Bright':'Dark'} focus: peak |z| ${b.peakZ.toFixed(1)}, size ≈${b.areaPct.toFixed(1)}% of intracranial cross-section, contralateral difference ${b.dz.toFixed(1)}σ`+
+      (t.mod==='CT'&&!sl.raster?`, mean ≈${Math.round(b.meanVal)} HU`:'')+'.'+
+      `\n   Location: ${loc.side}; ${loc.depth}; ${loc.ap}; ${loc.level}.\n   Vascular territory if vascular (verify on landmarks): ${loc.terr}.`;
+    // signal profile across all loaded sequences
+    const prof={}, profTxt=[];
+    const detBy=new Map(L.dets.map(d=>[d.p.key,d]));
+    pools.forEach(p=>{
+      const si=_relIdx(b.si,t.pool.length,p.pool.length);
+      const det=detBy.get(p.key);
+      const r=regionRatioAt(p.pool[si],b.u,b.v,rad);
+      let arrow;
+      if(det) arrow=det.pol>0?'↑':'↓';             // the detector itself found it here
+      else if(!r) return;
+      else arrow=r.dz>=2.0?'↑':r.dz<=-2.0?'↓':'='; // ±2σ vs mirror, below that = no clear change
+      if(!prof[p.mod]||prof[p.mod]==='=') prof[p.mod]=arrow;
+      let extra='';
+      if(r) extra=` (${r.dz>=0?'+':''}${r.dz.toFixed(1)}σ vs mirror`+(isFinite(r.ratio)&&r.ratio>0?`, ratio ${r.ratio.toFixed(2)}`:'')+(p.mod==='CT'&&!p.pool[si].raster?`, ≈${Math.round(r.val)} HU`:'')+')';
+      profTxt.push(`${p.mod} #${si+1} ${arrow}${det?' [detected]':''}${extra}`);
+    });
+    line+=`\n   Signal profile at this position (lesion vs contralateral mirror): ${profTxt.join(' · ')}.`;
+    const hints=cadPatternHints(prof);
+    if(hints.length) line+='\n   Pattern suggests (non-diagnostic — verify): '+hints.join(' | ')+'.';
+    lines.push(line);
+
+    // Image A: full slice with red box
+    const full=renderForAI(sl,t.mod==='UNK'?'DWI':t.mod);
+    const S=Math.min(1,640/Math.max(full.width,full.height));
+    const A=document.createElement('canvas');A.width=Math.round(full.width*S);A.height=Math.round(full.height*S);
+    const ac=A.getContext('2d');ac.drawImage(full,0,0,A.width,A.height);
+    const [x0,y0,x1,y1]=b.bbox, pad=10;
+    ac.strokeStyle='#ff2d2d';ac.lineWidth=2;
+    ac.strokeRect(x0*A.width-pad,y0*A.height-pad,(x1-x0)*A.width+2*pad,(y1-y0)*A.height+2*pad);
+    _lbl(ac,`${id} ${t.mod} #${b.si+1} (red box = candidate, look INSIDE it)`,2,2,'#ff6');
+    images.push({b64:A.toDataURL('image/png').split(',')[1],label:id+' FULL'});
+
+    // Image B: comparison grid — one row per sequence (primary first), lesion | mirror
+    const rowsP=[t,...pools.filter(p=>p!==t)].slice(0,6);
+    const C=rowsP.length>4?200:240;
+    const G=document.createElement('canvas');G.width=2*C+6;G.height=rowsP.length*(C+6);
+    const gc=G.getContext('2d');gc.fillStyle='#222';gc.fillRect(0,0,G.width,G.height);
+    rowsP.forEach((p,ri)=>{
+      const m=p.mod==='UNK'?'DWI':p.mod;
+      const si=_relIdx(b.si,t.pool.length,p.pool.length), s2=p.pool[si];
+      gc.drawImage(_cropAt(s2,m,b.u,b.v,0.2,C,false),0,ri*(C+6));
+      gc.drawImage(_cropAt(s2,m,b.u,b.v,0.2,C,true),C+6,ri*(C+6));
+      _lbl(gc,`${id} ${p.mod} #${si+1} LESION`,2,ri*(C+6)+2,'#ff6');
+      _lbl(gc,`${p.mod} MIRROR`,C+8,ri*(C+6)+2,'#0ff');
+    });
+    images.push({b64:G.toDataURL('image/png').split(',')[1],label:id+' COMPARE'});
+  });
+
+  // 3. global metrics
+  const gm=cadGlobalMetrics(pools);
+  if(gm){
+    lines.push(`GLOBAL (crude, verify): on ${gm.series.mod} image #${gm.si+1} (largest ventricular cross-section) central CSF occupies ${(100*gm.frac).toFixed(0)}% of the central brain region`+
+      ` (high values suggest ventriculomegaly / hydrocephalus or atrophy); image-left/right CSF area ratio ${gm.lr.toFixed(2)}`+
+      ` (marked asymmetry suggests mass effect, entrapment or ex-vacuo change); CSF centroid offset ${(100*gm.off).toFixed(1)}% of brain width ${gm.off<0?'toward image-left':'toward image-right'} (crude midline-shift proxy; > ~3% deserves a measured midline shift).`);
+  }
+  if(nC) lines.push('Images supplied: for each CAD-n a "FULL" image (red box) and a "COMPARE" zoom grid (one row per sequence; left = lesion position, right = contralateral mirror).',
+    'RULES FOR CAD CANDIDATES: address EVERY CAD-n explicitly in FINDINGS — CONFIRM it (describe it with side, structure, anatomical level, intra- vs extra-axial, vascular territory if relevant, signal on each sequence, image #) or REJECT it naming the specific mimic (skull-base / sinus susceptibility, normal veins or choroid plexus, flow artefact, partial volume of bone or cortex, T2 shine-through, motion). Use the signal profile and the pattern hints to build a ranked differential; the hints are not a diagnosis. A candidate with DWI↑ + ADC↓ must be reported as restricted diffusion unless you give a concrete reason. The CAD is a high-sensitivity aid: still scan all images yourself for findings it cannot detect (symmetric disease, atrophy, extra-axial collections, herniation, vessel abnormalities).');
   return {text:lines.join('\n'),images,count:nC};
 }
 window.runLesionCAD=runLesionCAD;
@@ -4110,13 +4216,13 @@ For EACH abnormal region, answer:
   • Is it FOCAL or DIFFUSE?
   • Does it cross a vascular territory, or follow grey-white matter anatomy?
   • Is there asymmetry vs contralateral mirror site? (compare L vs R pixel-by-pixel)
-  ${aiSeriesKeys.length>1?`• DWI status: bright / dark / normal — always vs. the contralateral mirror at the same level
-  • ADC status: DARK = true restriction | BRIGHT = T2 shine-through / vasogenic | normal (use the CAD ADC ratio as quantitative support)
-  • FLAIR status: bright / normal
-  → DWI↑ + ADC↓ + FLAIR− → HYPERACUTE infarct (< 4.5–6 h, DWI–FLAIR mismatch)
-     DWI↑ + ADC↓ + FLAIR+ → ACUTE infarct (> 6 h – ~7 days)
-     DWI↑ + ADC normal/↑ + FLAIR+ → SUBACUTE (ADC pseudonormalisation ~1–2 wk) or T2 shine-through
-     DWI−/↓ + ADC↑ + FLAIR+ → CHRONIC (gliosis / encephalomalacia)`:''}
+  ${aiSeriesKeys.length>1?`• Record the signal on EVERY loaded sequence (DWI, ADC, FLAIR, T2, T1, T1 post-contrast, SWI, CT density) — always vs. the contralateral mirror
+  • Diffusion: DWI↑ + ADC↓ = true restriction | DWI↑ + ADC normal/↑ = T2 shine-through / vasogenic
+  • Haemorrhage / mineral: SWI dark; T1/T2 combination gives the blood age; CT HU separates blood (≈50–90) from calcium (>~120)
+  • Enhancement: present / absent and pattern (solid, ring, incomplete ring, dural tail, leptomeningeal, gyriform)
+  • Mass effect: none / local / midline shift / herniation
+  → Build a ranked differential from the full profile (vascular, neoplastic, infectious/inflammatory, demyelinating, traumatic, metabolic/toxic, degenerative, congenital)
+  → If ischaemic: DWI↑ ADC↓ FLAIR− → hyperacute (< 4.5–6 h) | FLAIR+ → acute (> 6 h – ~7 d) | ADC pseudonormal → subacute | ADC↑ FLAIR+ → chronic`:''}
 
 STEP 3 — EXTRA-AXIAL AND VASCULAR
   □ Sulci / subarachnoid spaces — effaced or widened? FLAIR bright (blood)?
