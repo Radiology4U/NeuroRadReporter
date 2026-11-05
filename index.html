@@ -2188,6 +2188,97 @@ X.B(E,Y);return E}return J}())
             <div class="vh-icon blue">⚙️</div>
             <div><h1>Settings &amp; Info</h1><p>Configuration, anatomy reference and how NeuroRadReporter works.</p></div>
           </div>
+          <div class="card" id="about-card">
+            <div class="card-hdr">ℹ️ About NeuroRadReporter</div>
+            <div class="card-body about">
+              <p class="about-lead">NeuroRadReporter turns brain MRI and CT studies into a structured neuroradiology report draft. Everything except the AI call runs inside your browser: there is no backend, and no images or patient data are stored on any server.</p>
+
+              <div class="about-grid">
+                <div><span class="about-k">Version</span><span class="about-v">v1.2-pre · research use only</span></div>
+                <div><span class="about-k">Hosting</span><span class="about-v">Static page on GitHub Pages</span></div>
+                <div><span class="about-k">AI model</span><span class="about-v" id="about-model">—</span></div>
+                <div><span class="about-k">Inputs</span><span class="about-v">DICOM · JPG · PNG · TIFF · PACS (DICOMweb, Orthanc, FHIR)</span></div>
+              </div>
+
+              <h3 class="about-h">Architecture</h3>
+              <div class="arch-wrap">
+              <svg class="arch" viewBox="0 0 980 520" role="img" aria-label="NeuroRadReporter architecture diagram">
+                <defs>
+                  <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arch-head"/></marker>
+                </defs>
+
+                <!-- browser boundary -->
+                <rect x="185" y="38" width="600" height="468" rx="14" class="arch-zone"/>
+                <text x="203" y="62" class="arch-zone-t">YOUR BROWSER · runs locally · no backend</text>
+
+                <!-- lane labels -->
+                <text x="20" y="62" class="arch-zone-t">INPUTS</text>
+                <text x="815" y="62" class="arch-zone-t">EXTERNAL</text>
+
+                <!-- inputs -->
+                <g class="n-in"><rect x="20" y="95" width="140" height="58" rx="9"/><text x="90" y="119" class="t1">Local files</text><text x="90" y="137" class="t2">DICOM · JPG · PNG · TIFF</text></g>
+                <g class="n-in"><rect x="20" y="175" width="140" height="58" rx="9"/><text x="90" y="199" class="t1">PACS</text><text x="90" y="217" class="t2">DICOMweb · FHIR</text></g>
+
+                <!-- row 1 -->
+                <g class="n-loc"><rect x="205" y="95" width="170" height="60" rx="9"/><text x="290" y="119" class="t1">Loader &amp; parser</text><text x="290" y="138" class="t2">DICOM tags · series grouping</text></g>
+                <g class="n-loc"><rect x="400" y="95" width="170" height="60" rx="9"/><text x="485" y="119" class="t1">Anonymisation</text><text x="485" y="138" class="t2">PHI removed · pseudonym IDs</text></g>
+                <g class="n-loc"><rect x="595" y="95" width="170" height="60" rx="9"/><text x="680" y="119" class="t1">Viewer</text><text x="680" y="138" class="t2">dropdowns · window/level</text></g>
+
+                <!-- row 2: AI pipeline -->
+                <g class="n-ai"><rect x="205" y="235" width="170" height="60" rx="9"/><text x="290" y="259" class="t1">Enhancement</text><text x="290" y="278" class="t2">modality · windowing · CLAHE</text></g>
+                <g class="n-cad"><rect x="400" y="235" width="170" height="60" rx="9"/><text x="485" y="259" class="t1">Lesion pre-screen (CAD)</text><text x="485" y="278" class="t2">asymmetry · ADC · FLAIR</text></g>
+                <g class="n-ai"><rect x="595" y="235" width="170" height="60" rx="9"/><text x="680" y="259" class="t1">Prompt builder</text><text x="680" y="278" class="t2">protocol · landmarks · anatomy</text></g>
+
+                <!-- row 3 -->
+                <g class="n-loc"><rect x="595" y="375" width="170" height="60" rx="9"/><text x="680" y="399" class="t1">Report parser</text><text x="680" y="418" class="t2">sections → form fields</text></g>
+                <g class="n-loc"><rect x="400" y="375" width="170" height="60" rx="9"/><text x="485" y="399" class="t1">Structured report</text><text x="485" y="418" class="t2">findings · impression · urgency</text></g>
+                <g class="n-loc"><rect x="205" y="375" width="170" height="60" rx="9"/><text x="290" y="399" class="t1">Export</text><text x="290" y="418" class="t2">TXT · HL7 FHIR · clipboard</text></g>
+
+                <!-- audit bar -->
+                <g class="n-audit"><rect x="205" y="458" width="560" height="32" rx="8"/><text x="485" y="479" class="t2">Audit log — every load, anonymisation, AI call and export is recorded · CSV export</text></g>
+
+                <!-- external -->
+                <g class="n-ext"><rect x="815" y="80" width="150" height="56" rx="9"/><text x="890" y="103" class="t1">PubMed E-utilities</text><text x="890" y="121" class="t2">live literature lookup</text></g>
+                <g class="n-ext"><rect x="815" y="158" width="150" height="56" rx="9"/><text x="890" y="181" class="t1">rag/cases.json</text><text x="890" y="199" class="t2">built weekly · GitHub Actions</text></g>
+                <g class="n-claude"><rect x="815" y="240" width="150" height="76" rx="9"/><text x="890" y="264" class="t1">Anthropic Claude API</text><text x="890" y="283" class="t2">vision + reasoning · HTTPS</text><text x="890" y="300" class="t2">anonymised images only</text></g>
+
+                <!-- edges -->
+                <g class="arch-e" marker-end="url(#arr)">
+                  <path d="M160,124 H203"/>
+                  <path d="M160,204 H183 V140 H203"/>
+                  <path d="M375,125 H398"/>
+                  <path d="M570,125 H593"/>
+                  <path d="M680,155 V195 H290 V233"/>
+                  <path d="M375,265 H398"/>
+                  <path d="M570,265 H593"/>
+                  <path d="M765,270 H813"/>
+                  <path d="M890,316 V405 H767"/>
+                  <path d="M595,405 H572"/>
+                  <path d="M400,405 H377"/>
+                </g>
+                <g class="arch-e dash" marker-end="url(#arr)">
+                  <path d="M815,108 H800 V250 H767"/>
+                </g>
+                <path d="M815,186 H800" class="arch-e-plain"/>
+              </svg>
+              </div>
+              <div class="arch-legend">
+                <span><i class="lg loc"></i>Local processing</span>
+                <span><i class="lg ai"></i>AI pipeline (local)</span>
+                <span><i class="lg cad"></i>Quantitative lesion pre-screen</span>
+                <span><i class="lg ext"></i>External service</span>
+              </div>
+
+              <h3 class="about-h">How a report is made</h3>
+              <p>Images are parsed and grouped into series, then anonymised before anything else happens. When you request a report, each selected series is enhanced for its sequence and tiled into contact sheets. The lesion pre-screen measures every slice: it finds focal bright clusters that the other hemisphere does not have, follows them across neighbouring slices, and measures ADC and FLAIR at the same spot. The prompt combines those measurements with a mandatory scan protocol, landmark levels L1–L7, the built-in anatomy reference and matching literature. Claude returns the report, which fills the structured form for you to review, edit and export.</p>
+
+              <h3 class="about-h">Privacy</h3>
+              <p>Your API key is kept in this browser's local storage only. DICOM patient tags are removed before images leave your machine, and only anonymised images and text go to the Anthropic API over HTTPS. Burned-in text inside JPG/PNG screenshots cannot be detected automatically, so crop it out before loading.</p>
+
+              <h3 class="about-h">Limitations</h3>
+              <p>Research use only: not validated for clinical diagnosis and not CE marked. The lesion pre-screen can miss lesions smaller than about 3 mm or symmetric disease. For JPG/PNG input, left/right assumes the radiological convention and slice order follows the file numbering. Every report must be checked by a radiologist.</p>
+            </div>
+          </div>
           <div class="card">
             <div class="card-hdr">🤖 AI Model</div>
             <div class="card-body">
@@ -2294,97 +2385,6 @@ X.B(E,Y);return E}return J}())
                 <a href="https://www.imaios.com/en" target="_blank" rel="noopener noreferrer" style="font-size:13px;color:var(--ac);font-weight:500;text-decoration:none">IMAIOS e-Anatomy ↗</a>
                 <div style="font-size:11px;color:var(--t3);margin-top:3px">Opens in a new tab. Not used by the AI: IMAIOS terms allow personal use only and prohibit extracting their content.</div>
               </div>
-            </div>
-          </div>
-          <div class="card" id="about-card">
-            <div class="card-hdr">ℹ️ About NeuroRadReporter</div>
-            <div class="card-body about">
-              <p class="about-lead">NeuroRadReporter turns brain MRI and CT studies into a structured neuroradiology report draft. Everything except the AI call runs inside your browser: there is no backend, and no images or patient data are stored on any server.</p>
-
-              <div class="about-grid">
-                <div><span class="about-k">Version</span><span class="about-v">v1.2-pre · research use only</span></div>
-                <div><span class="about-k">Hosting</span><span class="about-v">Static page on GitHub Pages</span></div>
-                <div><span class="about-k">AI model</span><span class="about-v" id="about-model">—</span></div>
-                <div><span class="about-k">Inputs</span><span class="about-v">DICOM · JPG · PNG · TIFF · PACS (DICOMweb, Orthanc, FHIR)</span></div>
-              </div>
-
-              <h3 class="about-h">Architecture</h3>
-              <div class="arch-wrap">
-              <svg class="arch" viewBox="0 0 980 520" role="img" aria-label="NeuroRadReporter architecture diagram">
-                <defs>
-                  <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arch-head"/></marker>
-                </defs>
-
-                <!-- browser boundary -->
-                <rect x="185" y="38" width="600" height="468" rx="14" class="arch-zone"/>
-                <text x="203" y="62" class="arch-zone-t">YOUR BROWSER · runs locally · no backend</text>
-
-                <!-- lane labels -->
-                <text x="20" y="62" class="arch-zone-t">INPUTS</text>
-                <text x="815" y="62" class="arch-zone-t">EXTERNAL</text>
-
-                <!-- inputs -->
-                <g class="n-in"><rect x="20" y="95" width="140" height="58" rx="9"/><text x="90" y="119" class="t1">Local files</text><text x="90" y="137" class="t2">DICOM · JPG · PNG · TIFF</text></g>
-                <g class="n-in"><rect x="20" y="175" width="140" height="58" rx="9"/><text x="90" y="199" class="t1">PACS</text><text x="90" y="217" class="t2">DICOMweb · FHIR</text></g>
-
-                <!-- row 1 -->
-                <g class="n-loc"><rect x="205" y="95" width="170" height="60" rx="9"/><text x="290" y="119" class="t1">Loader &amp; parser</text><text x="290" y="138" class="t2">DICOM tags · series grouping</text></g>
-                <g class="n-loc"><rect x="400" y="95" width="170" height="60" rx="9"/><text x="485" y="119" class="t1">Anonymisation</text><text x="485" y="138" class="t2">PHI removed · pseudonym IDs</text></g>
-                <g class="n-loc"><rect x="595" y="95" width="170" height="60" rx="9"/><text x="680" y="119" class="t1">Viewer</text><text x="680" y="138" class="t2">dropdowns · window/level</text></g>
-
-                <!-- row 2: AI pipeline -->
-                <g class="n-ai"><rect x="205" y="235" width="170" height="60" rx="9"/><text x="290" y="259" class="t1">Enhancement</text><text x="290" y="278" class="t2">modality · windowing · CLAHE</text></g>
-                <g class="n-cad"><rect x="400" y="235" width="170" height="60" rx="9"/><text x="485" y="259" class="t1">Lesion pre-screen (CAD)</text><text x="485" y="278" class="t2">asymmetry · ADC · FLAIR</text></g>
-                <g class="n-ai"><rect x="595" y="235" width="170" height="60" rx="9"/><text x="680" y="259" class="t1">Prompt builder</text><text x="680" y="278" class="t2">protocol · landmarks · anatomy</text></g>
-
-                <!-- row 3 -->
-                <g class="n-loc"><rect x="595" y="375" width="170" height="60" rx="9"/><text x="680" y="399" class="t1">Report parser</text><text x="680" y="418" class="t2">sections → form fields</text></g>
-                <g class="n-loc"><rect x="400" y="375" width="170" height="60" rx="9"/><text x="485" y="399" class="t1">Structured report</text><text x="485" y="418" class="t2">findings · impression · urgency</text></g>
-                <g class="n-loc"><rect x="205" y="375" width="170" height="60" rx="9"/><text x="290" y="399" class="t1">Export</text><text x="290" y="418" class="t2">TXT · HL7 FHIR · clipboard</text></g>
-
-                <!-- audit bar -->
-                <g class="n-audit"><rect x="205" y="458" width="560" height="32" rx="8"/><text x="485" y="479" class="t2">Audit log — every load, anonymisation, AI call and export is recorded · CSV export</text></g>
-
-                <!-- external -->
-                <g class="n-ext"><rect x="815" y="80" width="150" height="56" rx="9"/><text x="890" y="103" class="t1">PubMed E-utilities</text><text x="890" y="121" class="t2">live literature lookup</text></g>
-                <g class="n-ext"><rect x="815" y="158" width="150" height="56" rx="9"/><text x="890" y="181" class="t1">rag/cases.json</text><text x="890" y="199" class="t2">built weekly · GitHub Actions</text></g>
-                <g class="n-claude"><rect x="815" y="240" width="150" height="76" rx="9"/><text x="890" y="264" class="t1">Anthropic Claude API</text><text x="890" y="283" class="t2">vision + reasoning · HTTPS</text><text x="890" y="300" class="t2">anonymised images only</text></g>
-
-                <!-- edges -->
-                <g class="arch-e" marker-end="url(#arr)">
-                  <path d="M160,124 H203"/>
-                  <path d="M160,204 H183 V140 H203"/>
-                  <path d="M375,125 H398"/>
-                  <path d="M570,125 H593"/>
-                  <path d="M680,155 V195 H290 V233"/>
-                  <path d="M375,265 H398"/>
-                  <path d="M570,265 H593"/>
-                  <path d="M765,270 H813"/>
-                  <path d="M890,316 V405 H767"/>
-                  <path d="M595,405 H572"/>
-                  <path d="M400,405 H377"/>
-                </g>
-                <g class="arch-e dash" marker-end="url(#arr)">
-                  <path d="M815,108 H800 V250 H767"/>
-                </g>
-                <path d="M815,186 H800" class="arch-e-plain"/>
-              </svg>
-              </div>
-              <div class="arch-legend">
-                <span><i class="lg loc"></i>Local processing</span>
-                <span><i class="lg ai"></i>AI pipeline (local)</span>
-                <span><i class="lg cad"></i>Quantitative lesion pre-screen</span>
-                <span><i class="lg ext"></i>External service</span>
-              </div>
-
-              <h3 class="about-h">How a report is made</h3>
-              <p>Images are parsed and grouped into series, then anonymised before anything else happens. When you request a report, each selected series is enhanced for its sequence and tiled into contact sheets. The lesion pre-screen measures every slice: it finds focal bright clusters that the other hemisphere does not have, follows them across neighbouring slices, and measures ADC and FLAIR at the same spot. The prompt combines those measurements with a mandatory scan protocol, landmark levels L1–L7, the built-in anatomy reference and matching literature. Claude returns the report, which fills the structured form for you to review, edit and export.</p>
-
-              <h3 class="about-h">Privacy</h3>
-              <p>Your API key is kept in this browser's local storage only. DICOM patient tags are removed before images leave your machine, and only anonymised images and text go to the Anthropic API over HTTPS. Burned-in text inside JPG/PNG screenshots cannot be detected automatically, so crop it out before loading.</p>
-
-              <h3 class="about-h">Limitations</h3>
-              <p>Research use only: not validated for clinical diagnosis and not CE marked. The lesion pre-screen can miss lesions smaller than about 3 mm or symmetric disease. For JPG/PNG input, left/right assumes the radiological convention and slice order follows the file numbering. Every report must be checked by a radiologist.</p>
             </div>
           </div>
         </div>
